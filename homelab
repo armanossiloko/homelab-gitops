@@ -144,7 +144,9 @@ ensure_env() {
 # stack_up <stack> [--pull | --sync]
 #   --pull  pull newer images first
 #   --sync  pull, then recreate containers even if compose sees no change, so
-#           edits to mounted files (e.g. cloudflared/config.yml) take effect
+#           edits to mounted files take effect
+# Hooks: pre-up runs before `compose up` (a failure aborts the stack, e.g. it
+# renders config files); post-up runs after it (a failure only warns).
 # Errors are checked explicitly: callers use `stack_up ... || warn`, which
 # turns off `set -e` inside the function.
 stack_up() {
@@ -155,16 +157,17 @@ stack_up() {
     compose "$s" pull --quiet || return 1
   fi
   [[ $mode == --sync ]] && up_args+=(--force-recreate)
+  run_hook "$s" pre-up || return 1
   log "$s: up"
   compose "$s" up "${up_args[@]}" || return 1
-  run_hook "$s" post-up
+  run_hook "$s" post-up || true
 }
 
-# Optional, idempotent per-stack hook (e.g. stacks/portainer/post-up): runs from
-# the stack directory with homelab.conf, .homelab.env and the stack's .env
-# exported.
+# Optional, idempotent per-stack hook (stacks/<stack>/pre-up or post-up): runs
+# from the stack directory with homelab.conf, .homelab.env and the stack's .env
+# exported. Returns the hook's status (after warning on failure).
 run_hook() {
-  local s=$1 hook="$STACKS_DIR/$1/$2"
+  local s=$1 hook="$STACKS_DIR/$1/$2" rc=0
   [[ -x $hook ]] || return 0
   log "$s: running $2 hook"
   (
@@ -178,8 +181,9 @@ run_hook() {
     [[ -f .env ]] && source .env
     set +a
     "$hook"
-  ) || warn "$s: $2 hook failed"
-  return 0
+  ) || rc=$?
+  ((rc == 0)) || warn "$s: $2 hook failed"
+  return $rc
 }
 
 stack_down() { # works even when the stack's files are gone from the repo
@@ -246,6 +250,11 @@ cmd_apply() {
   ensure_socket; load_local_conf
   local s changed rc=0
   changed=$(git -C "$ROOT" diff --name-only "$1" "$2" -- stacks/ | awk -F/ 'NF>2 {print $2}' | sort -u)
+  # Shared settings (domain, paths, ports) can affect any stack: re-apply all.
+  if ! git -C "$ROOT" diff --quiet "$1" "$2" -- homelab.conf; then
+    log "homelab.conf changed: re-applying every stack"
+    changed=$( { echo "$changed"; all_stacks; } | grep -v '^$' | sort -u)
+  fi
   [[ -n $changed ]] || { echo "no stack changes"; return 0; }
   for s in $changed; do
     if [[ -f $STACKS_DIR/$s/compose.yml ]]; then

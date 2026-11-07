@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Renders config.yml from config.template.yml ({{DOMAIN}} → HOMELAB_DOMAIN) and
+# records its hash in .env as CONFIG_HASH. compose.yml puts the hash in a
+# label, so a changed config makes compose recreate the tunnel container.
+set -euo pipefail
+
+[[ -n ${HOMELAB_DOMAIN:-} ]] || { echo "HOMELAB_DOMAIN is not set in homelab.conf" >&2; exit 1; }
+
+rendered=$(sed "s/{{DOMAIN}}/$HOMELAB_DOMAIN/g" config.template.yml)
+if grep -q '{{' <<<"$rendered"; then
+  echo "config.template.yml has unknown placeholders" >&2
+  exit 1
+fi
+# Write in place (same inode), so a running container's bind mount sees it too.
+printf '%s\n' "$rendered" >config.yml
+
+hash=$(sha256sum config.yml | cut -c1-16)
+if grep -q '^CONFIG_HASH=' .env 2>/dev/null; then
+  sed -i "s/^CONFIG_HASH=.*/CONFIG_HASH=$hash/" .env
+else
+  printf 'CONFIG_HASH=%s\n' "$hash" >>.env
+fi
+echo "rendered config.yml for $HOMELAB_DOMAIN ($hash)"

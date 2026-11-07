@@ -1,6 +1,6 @@
 # Cloudflare Tunnel: publishes selected services to the internet without
 # opening any router ports. Which hostname goes to which service is defined in
-# config.yml (tracked in git); only the tunnel token is secret (.env).
+# config.template.yml (tracked in git); only the tunnel token is secret (.env).
 # Tunnel: <tunnel-name> (locally managed, config_src=local)
 name: cloudflared
 
@@ -16,4 +16,8 @@ services:
     environment:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN:?TUNNEL_TOKEN is missing; see "Cloudflare Tunnel" in README.md}
     volumes:
+      # Rendered from config.template.yml by the pre-up hook.
       - ./config.yml:/etc/cloudflared/config.yml:ro
+    labels:
+      # Changes whenever config.yml does, so compose recreates the container.
+      homelab.config-hash: ${CONFIG_HASH:-}
