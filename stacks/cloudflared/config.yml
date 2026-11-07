@@ -10,5 +10,10 @@ ingress:
   - hostname: immich.fakegamedevelopers.com
     service: http://localhost:10002
 
+  # No Cloudflare Access here: the FUTO Notes apps can't complete a login
+  # page. The sync password protects the server; notes are end-to-end encrypted.
+  - hostname: notes.fakegamedevelopers.com
+    service: http://localhost:10003
+
   # Anything else that reaches the tunnel gets a 404.
   - service: http_status:404

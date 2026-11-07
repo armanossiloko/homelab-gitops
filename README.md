@@ -72,10 +72,18 @@ mounted at `/mnt/media` and bind-mounted at `/modulab`), not on the OS drive.
 | **10000** | Portainer | https://&lt;host&gt;:10000    | `admin` / `./homelab secret portainer` (random per machine) |
 | **10001** | Jellyfin  | http://&lt;host&gt;:10001     | `modulab` / `modulab`                                   |
 | **10002** | Immich    | http://&lt;host&gt;:10002     | `modulab@modulab` / `modulab` (Immich logs in by email) |
+| **10003** | FUTO Notes | http://&lt;host&gt;:10003    | sync password from `./homelab secret futo-notes` (random per machine) |
 
-**From the internet:** Immich is also published at
-**https://immich.fakegamedevelopers.com** through a Cloudflare Tunnel (see
-[Cloudflare Tunnel](#cloudflare-tunnel)). Nothing else is exposed.
+**From the internet:** Immich (**https://immich.fakegamedevelopers.com**) and
+FUTO Notes (**https://notes.fakegamedevelopers.com**) are also published
+through a Cloudflare Tunnel (see [Cloudflare Tunnel](#cloudflare-tunnel)).
+Jellyfin and Portainer are LAN-only.
+
+**FUTO Notes** is a sync server for the end-to-end encrypted
+[FUTO Notes](https://notes.futo.org) apps; the server only stores encrypted
+data. In the app, open *Settings → Self-hosted sync*, then enter
+`https://notes.fakegamedevelopers.com` and the sync password. It's random
+rather than `modulab` because the server is on the internet.
 
 **Port scheme:** every web UI gets the next free port from **10000** upwards,
 mapped onto the app's own internal port (e.g. `10001:8096`). When you add a
@@ -185,6 +193,7 @@ stacks/
   portainer/            Portainer CE (admin password from .env secret)
   immich/               Immich server, ML, Valkey, Postgres (+ upstream hwaccel files)
   jellyfin/             Jellyfin with Intel iGPU passthrough
+  futo-notes/           FUTO Notes sync server (encrypted blobs + SQLite)
   cloudflared/          Cloudflare Tunnel; config.yml maps public hostnames
 .homelab.env            machine-local settings (gitignored)
 stacks/*/.env           machine-local values and secrets (gitignored)
@@ -200,6 +209,7 @@ ports are opened, and Cloudflare provides HTTPS.
 | Public hostname                    | Goes to                  |
 | ---------------------------------- | ------------------------ |
 | `immich.fakegamedevelopers.com`    | Immich (`localhost:10002`) |
+| `notes.fakegamedevelopers.com`     | FUTO Notes (`localhost:10003`) |
 
 * **Routing is in git:** [`stacks/cloudflared/config.yml`](stacks/cloudflared/config.yml)
   (a locally managed tunnel). Edits are applied by the next sync.
