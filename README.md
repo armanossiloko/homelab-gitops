@@ -73,6 +73,10 @@ mounted at `/mnt/media` and bind-mounted at `/modulab`), not on the OS drive.
 | **10001** | Jellyfin  | http://&lt;host&gt;:10001     | `modulab` / `modulab`                                   |
 | **10002** | Immich    | http://&lt;host&gt;:10002     | `modulab@modulab` / `modulab` (Immich logs in by email) |
 
+**From the internet:** Immich is also published at
+**https://immich.old-domain.example** through a Cloudflare Tunnel (see
+[Cloudflare Tunnel](#cloudflare-tunnel)). Nothing else is exposed.
+
 **Port scheme:** every web UI gets the next free port from **10000** upwards,
 mapped onto the app's own internal port (e.g. `10001:8096`). When you add a
 stack, give it the next number (10003, ...) and add a row here. Only the
@@ -176,14 +180,62 @@ daemon is around.
 ```
 bootstrap.sh            one-shot setup + deploy (calls ./homelab bootstrap)
 homelab                 CLI: up/down/update/sync/status/...
-homelab.conf            shared settings: data dir, media root, sync interval
+homelab.conf            shared settings: data dir, media root, ports, public URLs
 stacks/
   portainer/            Portainer CE (admin password from .env secret)
   immich/               Immich server, ML, Valkey, Postgres (+ upstream hwaccel files)
   jellyfin/             Jellyfin with Intel iGPU passthrough
+  cloudflared/          Cloudflare Tunnel; config.yml maps public hostnames
 .homelab.env            machine-local settings (gitignored)
 stacks/*/.env           machine-local values and secrets (gitignored)
 ```
+
+## Cloudflare Tunnel
+
+`stacks/cloudflared` runs a [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+named `<tunnel-name>` (account *<account>*, zone
+`old-domain.example`). The tunnel connects out to Cloudflare, so no router
+ports are opened, and Cloudflare provides HTTPS.
+
+| Public hostname                    | Goes to                  |
+| ---------------------------------- | ------------------------ |
+| `immich.old-domain.example`    | Immich (`localhost:10002`) |
+
+* **Routing is in git:** [`stacks/cloudflared/config.yml`](stacks/cloudflared/config.yml)
+  (a locally managed tunnel). Edits are applied by the next sync.
+* **Publishing another service:** add an ingress rule to `config.yml`, add a
+  proxied DNS `CNAME <name> → <tunnel-id>.cfargotunnel.com`
+  in Cloudflare, then push. Think twice before publishing admin tools like
+  Portainer.
+* **Only secret:** `TUNNEL_TOKEN` in `stacks/cloudflared/.env` (gitignored). On a
+  new machine the stack refuses to start until it is set. Fetch the token with
+  an API token that has *Account → Cloudflare Tunnel: Read*:
+
+  ```bash
+  curl -s -H "Authorization: Bearer $CF_API_TOKEN" \
+    https://api.cloudflare.com/client/v4/accounts/<account-id>/cfd_tunnel/<tunnel-id>/token \
+    | python3 -c 'import sys,json; print("TUNNEL_TOKEN=" + json.load(sys.stdin)["result"])' >> stacks/cloudflared/.env
+  ./homelab up cloudflared
+  ```
+
+  Only run one machine with the same token at a time, unless you deliberately
+  want Cloudflare to load-balance between them.
+* **Immich's external domain** (used in share links) is set from
+  `IMMICH_PUBLIC_URL` in `homelab.conf`.
+
+**Uploading through the tunnel:** Cloudflare's free plan rejects uploads over
+**100 MB**, so long phone videos fail over the public URL. In the Immich phone
+app, open *Settings → Networking → Automatic URL switching*, add your home
+Wi-Fi with the local URL `http://<host>:10002`, and keep
+`https://immich.old-domain.example` as the external URL. Phones then back
+up over the LAN at home and use the tunnel only when away.
+
+**Security:** Immich's login page is now reachable by anyone. Give every
+account a strong password (the `modulab` defaults are for the LAN only), and
+don't enable public sign-up. For more protection, put a
+[Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/applications/)
+policy in front of the hostname. The Immich mobile app then needs custom
+headers with an Access service token.
 
 ## Hardware acceleration
 

@@ -1,0 +1,19 @@
+# Cloudflare Tunnel: publishes selected services to the internet without
+# opening any router ports. Which hostname goes to which service is defined in
+# config.yml (tracked in git); only the tunnel token is secret (.env).
+# Tunnel: <tunnel-name> (locally managed, config_src=local)
+name: cloudflared
+
+services:
+  cloudflared:
+    container_name: cloudflared
+    image: docker.io/cloudflare/cloudflared:latest
+    restart: always
+    # Host networking lets the tunnel reach services on their published
+    # localhost ports (e.g. Immich on 10002) independently of their stacks.
+    network_mode: host
+    command: tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?TUNNEL_TOKEN is missing; see "Cloudflare Tunnel" in README.md}
+    volumes:
+      - ./config.yml:/etc/cloudflared/config.yml:ro

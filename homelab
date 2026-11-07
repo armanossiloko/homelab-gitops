@@ -141,17 +141,28 @@ ensure_env() {
 
 # ------------------------------------------------------------- operations --
 
-stack_up() { # stack_up <stack> [--pull]
-  local s=$1
-  ensure_env "$s"
-  if [[ ${2:-} == --pull ]]; then log "$s: pulling images"; compose "$s" pull --quiet; fi
+# stack_up <stack> [--pull | --sync]
+#   --pull  pull newer images first
+#   --sync  pull, then recreate containers even if compose sees no change, so
+#           edits to mounted files (e.g. cloudflared/config.yml) take effect
+# Errors are checked explicitly: callers use `stack_up ... || warn`, which
+# turns off `set -e` inside the function.
+stack_up() {
+  local s=$1 mode=${2:-} up_args=(-d --remove-orphans)
+  ensure_env "$s" || return 1
+  if [[ $mode == --pull || $mode == --sync ]]; then
+    log "$s: pulling images"
+    compose "$s" pull --quiet || return 1
+  fi
+  [[ $mode == --sync ]] && up_args+=(--force-recreate)
   log "$s: up"
-  compose "$s" up -d --remove-orphans
+  compose "$s" up "${up_args[@]}" || return 1
   run_hook "$s" post-up
 }
 
 # Optional, idempotent per-stack hook (e.g. stacks/portainer/post-up): runs from
-# the stack directory with the stack's .env variables exported.
+# the stack directory with homelab.conf, .homelab.env and the stack's .env
+# exported.
 run_hook() {
   local s=$1 hook="$STACKS_DIR/$1/$2"
   [[ -x $hook ]] || return 0
@@ -159,11 +170,16 @@ run_hook() {
   (
     cd "$STACKS_DIR/$s"
     set -a
+    # shellcheck disable=SC1090,SC1091
+    [[ -f $SHARED_CONF ]] && source "$SHARED_CONF"
+    # shellcheck disable=SC1090
+    [[ -f $LOCAL_CONF ]] && source "$LOCAL_CONF"
     # shellcheck disable=SC1091
     [[ -f .env ]] && source .env
     set +a
     "$hook"
   ) || warn "$s: $2 hook failed"
+  return 0
 }
 
 stack_down() { # works even when the stack's files are gone from the repo
@@ -177,8 +193,13 @@ stack_down() { # works even when the stack's files are gone from the repo
   fi
 }
 
-cmd_up()      { ensure_socket; load_local_conf; local s; for s in $(resolve_stacks "$@"); do stack_up "$s"; done; }
-cmd_update()  { ensure_socket; load_local_conf; local s; for s in $(resolve_stacks "$@"); do stack_up "$s" --pull; done; }
+up_stacks() { # up_stacks <mode> <stack...>: keeps going if one stack fails
+  local mode=$1 s rc=0; shift
+  for s in "$@"; do stack_up "$s" "$mode" || { warn "$s: failed (see output above)"; rc=1; }; done
+  return $rc
+}
+cmd_up()      { ensure_socket; load_local_conf; up_stacks "" $(resolve_stacks "$@"); }
+cmd_update()  { ensure_socket; load_local_conf; up_stacks --pull $(resolve_stacks "$@"); }
 cmd_down()    { ensure_socket; local s; for s in $(resolve_stacks "$@"); do stack_down "$s"; done; }
 cmd_restart() { ensure_socket; local s; for s in $(resolve_stacks "$@"); do compose "$s" restart; done; }
 cmd_logs()    { [[ $# -ge 1 ]] || die "usage: homelab logs <stack> [service]"; local s=$1; shift; resolve_stacks "$s" >/dev/null; compose "$s" logs -f --tail=100 "$@"; }
@@ -228,7 +249,7 @@ cmd_apply() {
   [[ -n $changed ]] || { echo "no stack changes"; return 0; }
   for s in $changed; do
     if [[ -f $STACKS_DIR/$s/compose.yml ]]; then
-      stack_up "$s" --pull || { warn "$s: failed to apply"; rc=1; }
+      stack_up "$s" --sync || { warn "$s: failed to apply"; rc=1; }
     else
       stack_down "$s" || { warn "$s: failed to take down"; rc=1; }
     fi
@@ -306,7 +327,7 @@ cmd_bootstrap() {
   log "data directory:  $HOMELAB_DATA"
   log "media directory: $HOMELAB_MEDIA"
   open_firewall
-  cmd_up
+  cmd_up || warn "some stacks did not start; fix them and run ./homelab up"
   if git -C "$ROOT" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
     cmd_autosync on
   else

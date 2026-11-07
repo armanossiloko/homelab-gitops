@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Creates the Immich admin account on a fresh install (no-op once initialized).
+# 1. Creates the Immich admin account on a fresh install.
+# 2. Sets Immich's external domain (used in share links) to IMMICH_PUBLIC_URL
+#    from homelab.conf, if set.
 set -euo pipefail
 
 API=http://localhost:10002/api
@@ -8,11 +10,26 @@ for _ in $(seq 90); do
   sleep 2
 done
 
-if curl -fsS "$API/server/config" | grep -q '"isInitialized":true'; then
-  exit 0
+if ! curl -fsS "$API/server/config" | grep -q '"isInitialized":true'; then
+  body=$(printf '{"email":"%s","password":"%s","name":"%s"}' \
+    "$IMMICH_ADMIN_EMAIL" "$IMMICH_ADMIN_PASSWORD" "${IMMICH_ADMIN_NAME:-admin}")
+  curl -fsS -o /dev/null -X POST "$API/auth/admin-sign-up" -H 'Content-Type: application/json' -d "$body"
+  echo "created Immich admin $IMMICH_ADMIN_EMAIL"
 fi
 
-body=$(printf '{"email":"%s","password":"%s","name":"%s"}' \
-  "$IMMICH_ADMIN_EMAIL" "$IMMICH_ADMIN_PASSWORD" "${IMMICH_ADMIN_NAME:-admin}")
-curl -fsS -o /dev/null -X POST "$API/auth/admin-sign-up" -H 'Content-Type: application/json' -d "$body"
-echo "created Immich admin $IMMICH_ADMIN_EMAIL"
+[[ -n ${IMMICH_PUBLIC_URL:-} ]] || exit 0
+current=$(curl -fsS "$API/server/config" | sed -n 's/.*"externalDomain":"\([^"]*\)".*/\1/p')
+[[ $current == "$IMMICH_PUBLIC_URL" ]] && exit 0
+
+token=$(curl -fsS -X POST "$API/auth/login" -H 'Content-Type: application/json' \
+  -d "$(printf '{"email":"%s","password":"%s"}' "$IMMICH_ADMIN_EMAIL" "$IMMICH_ADMIN_PASSWORD")" 2>/dev/null |
+  sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p') || true
+if [[ -z $token ]]; then
+  echo "admin password changed, so the external domain can't be set automatically." >&2
+  echo "Set it in Administration → Settings → Server → External Domain: $IMMICH_PUBLIC_URL" >&2
+  exit 0
+fi
+curl -fsS -H "Authorization: Bearer $token" "$API/system-config" |
+  python3 -c 'import sys,json; c=json.load(sys.stdin); c["server"]["externalDomain"]=sys.argv[1]; print(json.dumps(c))' "$IMMICH_PUBLIC_URL" |
+  curl -fsS -o /dev/null -X PUT "$API/system-config" -H "Authorization: Bearer $token" -H 'Content-Type: application/json' -d @-
+echo "set Immich external domain to $IMMICH_PUBLIC_URL"
