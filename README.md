@@ -28,11 +28,39 @@ Bootstrap is idempotent (safe to re-run). It:
 3. Renders each stack's `.env` from `.env.example` (paths, timezone, random secrets).
 4. Deploys every stack and enables the `homelab-sync` timer.
 
-Optional overrides on the **first** run (stored in `.homelab.env` afterwards):
+Shared settings live in [`homelab.conf`](homelab.conf). To override them on
+one machine, pass them to bootstrap. They are saved to the gitignored
+`.homelab.env`:
 
 ```bash
-HOMELAB_DATA=/mnt/storage/homelab HOMELAB_SYNC_INTERVAL=10min ./bootstrap.sh
+HOMELAB_MEDIA=/srv/media HOMELAB_SYNC_INTERVAL=10min ./bootstrap.sh
 ```
+
+## Media storage
+
+Media lives on the dedicated 512 GB SSD (`/dev/nvme1n1p1`, label `media`,
+mounted at `/mnt/media` and bind-mounted at `/modulab`), not on the OS drive.
+`HOMELAB_MEDIA=/modulab/media`:
+
+| Folder on the host              | Inside the container | Used by                    |
+| ------------------------------- | -------------------- | -------------------------- |
+| `/modulab/media/movies`         | `/media/movies`      | Jellyfin library *Movies*  |
+| `/modulab/media/shows`          | `/media/shows`       | Jellyfin library *Shows*   |
+| `/modulab/media/cartoons`       | `/media/cartoons`    | Jellyfin library *Cartoons* |
+| `/modulab/media/images`         | `/data`              | Immich (all photos & videos) |
+
+* **Jellyfin:** copy files into the folders and Jellyfin picks them up (or use
+  Dashboard → Libraries → Scan). Naming that matches well: `movies/Title (Year)/Title (Year).mkv`
+  and `shows/Show Name/Season 01/Show Name S01E01.mkv`. Cartoons is a TV-show
+  library, so use the same layout as `shows`. Jellyfin mounts media read-only.
+* **Immich:** upload from the web UI or the Immich phone app (server URL
+  `http://<host>:2283`). Immich manages the `images` folder itself: it holds
+  originals (`upload/` or `library/`), thumbnails, transcodes and nightly DB
+  dumps (`backups/`). Don't copy files into it by hand. To import an existing
+  photo folder, add it as an
+  [external library](https://docs.immich.app/features/libraries).
+* App state (Immich's Postgres database, Jellyfin's config and metadata) stays
+  in `HOMELAB_DATA` (`~/homelab-data`).
 
 ## Services
 
@@ -43,8 +71,10 @@ HOMELAB_DATA=/mnt/storage/homelab HOMELAB_SYNC_INTERVAL=10min ./bootstrap.sh
 | Portainer | https://&lt;host&gt;:9443   | `admin` / `./homelab secret portainer` (random per machine) |
 
 Accounts are created automatically on first start by each stack's `post-up`
-hook, so there are no setup wizards. Jellyfin also gets two libraries:
-**Videos** (`~/Videos`) and **Music** (`~/Music`). Change the defaults in
+hook, so there are no setup wizards. Jellyfin also gets the *Movies*, *Shows*
+and *Cartoons* libraries (see [Media storage](#media-storage)). Add accounts
+for family members in each app: Jellyfin → Dashboard → Users, Immich →
+Administration → Users. Change the defaults in
 `stacks/<stack>/.env.example` (for new machines) or `stacks/<stack>/.env` (for
 this one) **before** the first start. After that, change passwords in each
 app's UI. Portainer enforces a 12-character minimum, which is why it keeps a
@@ -91,12 +121,13 @@ overwritten, so secrets and local edits survive syncs.
 | Placeholder  | Becomes                                              |
 | ------------ | ---------------------------------------------------- |
 | `{{DATA}}`   | `$HOMELAB_DATA/<stack>` (default `~/homelab-data/<stack>`) |
+| `{{MEDIA}}`  | `$HOMELAB_MEDIA` (shared media root, `/modulab/media`) |
 | `{{HOME}}`   | your home directory                                  |
 | `{{TZ}}`     | the host timezone                                    |
 | `{{UID}}` `{{GID}}` | your user/group id                            |
 | `{{RANDOM}}` | a new 32-character alphanumeric secret               |
 
-Values that use `{{DATA}}` or `{{HOME}}` are treated as directories and created
+Values that use `{{DATA}}`, `{{MEDIA}}` or `{{HOME}}` are treated as directories and created
 automatically.
 
 ### Hooks
@@ -135,6 +166,7 @@ daemon is around.
 ```
 bootstrap.sh            one-shot setup + deploy (calls ./homelab bootstrap)
 homelab                 CLI: up/down/update/sync/status/...
+homelab.conf            shared settings: data dir, media root, sync interval
 stacks/
   portainer/            Portainer CE (admin password from .env secret)
   immich/               Immich server, ML, Valkey, Postgres (+ upstream hwaccel files)
@@ -173,17 +205,15 @@ If a machine has no `/dev/dri`, remove the `devices:` entry in
 
 ## Backups
 
-The important data lives under `HOMELAB_DATA` (`~/homelab-data` by default):
-`immich/library` (photos), `immich/postgres` (Immich DB), and `jellyfin/config`.
-Immich also writes automatic DB dumps to `immich/library/backups`. Files created
-by containers that run as a non-root user (for example Postgres) are owned by a
-sub-UID on the host. To back them up or inspect them, use `podman unshare`, e.g.
-`podman unshare tar czf backup.tgz ~/homelab-data`.
+Two places hold everything worth keeping:
 
-## Upgrading Immich
+* **`/modulab/media`** (SSD): your movies, shows and cartoons, plus `images/`,
+  which holds every Immich photo and video and Immich's nightly database
+  dumps in `images/backups/`.
+* **`~/homelab-data`**: `immich/postgres` (Immich's live database) and
+  `jellyfin/config` (users, watch history, metadata).
 
-`IMMICH_VERSION=v3` follows the v3 release line, so `./homelab update immich`
-pulls new v3.x releases. Before a major version jump, compare
-`stacks/immich/compose.yml` with the upstream
-[docker-compose.yml](https://github.com/immich-app/immich/releases/latest/download/docker-compose.yml),
-then commit the change.
+Both drives are in the same machine, so copy both folders to another disk or
+location. Files created by containers that run as a non-root user (for example
+Postgres) are owned by a sub-UID on the host. To back them up or inspect them,
+use `podman unshare`, e.g. `podman unshare tar czf backup.tgz ~/homelab-data`.

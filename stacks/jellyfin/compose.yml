@@ -19,6 +19,8 @@ services:
     volumes:
       - ${JELLYFIN_CONFIG}:/config
       - ${JELLYFIN_CACHE}:/cache
-      # Media libraries are mounted read-only. Add more lines as needed.
-      - ${MEDIA_VIDEOS}:/media/videos:ro
-      - ${MEDIA_MUSIC}:/media/music:ro
+      # Media libraries on the SSD (HOMELAB_MEDIA), mounted read-only.
+      # The post-up hook registers each one as a Jellyfin library.
+      - ${MEDIA_MOVIES}:/media/movies:ro
+      - ${MEDIA_SHOWS}:/media/shows:ro
+      - ${MEDIA_CARTOONS}:/media/cartoons:ro

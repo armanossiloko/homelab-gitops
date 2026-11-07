@@ -25,21 +25,29 @@ warn() { printf '%swarn:%s %s\n' "$B$Y" "$N" "$*" >&2; }
 die()  { printf '%serror:%s %s\n' "$B$R" "$N" "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
-# Machine-local settings (gitignored). Defaults can be overridden by exporting
-# the variable before the first bootstrap, e.g. HOMELAB_DATA=/mnt/big ./bootstrap.sh
+# Settings: homelab.conf (tracked, shared defaults) is overridden by .homelab.env
+# (gitignored, this machine only). `bootstrap` saves any HOMELAB_* variable you
+# pass on its command line into .homelab.env, e.g. HOMELAB_MEDIA=/srv/media ./bootstrap.sh
+CONF_VARS=(HOMELAB_DATA HOMELAB_MEDIA HOMELAB_SYNC_INTERVAL)
+SHARED_CONF="$ROOT/homelab.conf"
+
+save_conf_overrides() {
+  local v
+  for v in "${CONF_VARS[@]}"; do
+    [[ -n ${!v:-} ]] || continue
+    touch "$LOCAL_CONF"
+    sed -i "/^$v=/d" "$LOCAL_CONF"
+    printf '%s=%q\n' "$v" "${!v}" >>"$LOCAL_CONF"
+    log "saved $v=${!v} to .homelab.env"
+  done
+}
+
 load_local_conf() {
-  if [[ ! -f $LOCAL_CONF ]]; then
-    cat >"$LOCAL_CONF" <<EOF
-# Machine-local homelab settings (not committed). Created by ./homelab.
-# Root directory for persistent service data (one subfolder per stack).
-HOMELAB_DATA=${HOMELAB_DATA:-$HOME/homelab-data}
-# How often the sync timer checks git for new commits (systemd time span).
-HOMELAB_SYNC_INTERVAL=${HOMELAB_SYNC_INTERVAL:-5min}
-EOF
-  fi
   # shellcheck disable=SC1090
-  source "$LOCAL_CONF"
-  : "${HOMELAB_DATA:=$HOME/homelab-data}" "${HOMELAB_SYNC_INTERVAL:=5min}"
+  [[ -f $SHARED_CONF ]] && source "$SHARED_CONF"
+  # shellcheck disable=SC1090
+  [[ -f $LOCAL_CONF ]] && source "$LOCAL_CONF"
+  : "${HOMELAB_DATA:=$HOME/homelab-data}" "${HOMELAB_MEDIA:=$HOME/media}" "${HOMELAB_SYNC_INTERVAL:=5min}"
 }
 
 # All stacks currently defined in the working tree, sorted.
@@ -98,9 +106,11 @@ host_tz() {
 # Render stacks/<s>/.env.example into stacks/<s>/.env. Existing values are never
 # touched; keys added to the example later are appended. Placeholders:
 #   {{DATA}}   → $HOMELAB_DATA/<stack>     {{HOME}} → $HOME
+#   {{MEDIA}}  → $HOMELAB_MEDIA (shared media root, not per stack)
 #   {{TZ}}     → host timezone             {{UID}}/{{GID}} → your ids
 #   {{RANDOM}} → a fresh 32-char alphanumeric secret
-# Values that use {{DATA}} or {{HOME}} are paths and get created as directories.
+# Values that use {{DATA}}, {{MEDIA}} or {{HOME}} are paths and get created as
+# directories.
 ensure_env() {
   local s=$1 example="$STACKS_DIR/$1/.env.example" env="$STACKS_DIR/$1/.env"
   [[ -f $example ]] || return 0
@@ -112,15 +122,18 @@ ensure_env() {
     key=${BASH_REMATCH[1]} val=${BASH_REMATCH[2]}
     grep -q "^$key=" "$env" && continue
     local is_path=0
-    [[ $val == *'{{DATA}}'* || $val == *'{{HOME}}'* ]] && is_path=1
+    [[ $val == *'{{DATA}}'* || $val == *'{{MEDIA}}'* || $val == *'{{HOME}}'* ]] && is_path=1
     val=${val//'{{DATA}}'/$HOMELAB_DATA/$s}
+    val=${val//'{{MEDIA}}'/$HOMELAB_MEDIA}
     val=${val//'{{HOME}}'/$HOME}
     val=${val//'{{TZ}}'/$tz}
     val=${val//'{{UID}}'/$(id -u)}
     val=${val//'{{GID}}'/$(id -g)}
     while [[ $val == *'{{RANDOM}}'* ]]; do val=${val/'{{RANDOM}}'/$(random_secret)}; done
     printf '%s=%s\n' "$key" "$val" >>"$env"
-    if ((is_path)); then mkdir -p "$val"; fi
+    if ((is_path)); then
+      mkdir -p "$val" || die "$s: cannot create $val (set HOMELAB_DATA / HOMELAB_MEDIA in .homelab.env)"
+    fi
   done <"$example"
   return 0
 }
@@ -285,9 +298,12 @@ cmd_bootstrap() {
       || warn "could not enable linger; containers will start at login instead of at boot"
   fi
 
+  save_conf_overrides
   load_local_conf
-  mkdir -p "$HOMELAB_DATA"
-  log "data directory: $HOMELAB_DATA"
+  mkdir -p "$HOMELAB_DATA" || die "cannot create $HOMELAB_DATA"
+  mkdir -p "$HOMELAB_MEDIA" || die "cannot create $HOMELAB_MEDIA (set HOMELAB_MEDIA, e.g. HOMELAB_MEDIA=~/media ./bootstrap.sh)"
+  log "data directory:  $HOMELAB_DATA"
+  log "media directory: $HOMELAB_MEDIA"
   cmd_up
   if git -C "$ROOT" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
     cmd_autosync on
