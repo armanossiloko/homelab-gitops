@@ -8,8 +8,9 @@ services:
     image: docker.io/jellyfin/jellyfin:latest
     restart: always
     ports:
-      - "8096:8096/tcp" # web UI
-      - "7359:7359/udp" # client auto-discovery on the LAN
+      - "10001:8096" # web UI
+      # LAN auto-discovery (7359/udp) is not published: under rootless Podman it
+      # advertises the container's internal address, which clients can't reach.
     environment:
       TZ: ${TZ:-Etc/UTC}
     devices:

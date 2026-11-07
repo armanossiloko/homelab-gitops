@@ -13,7 +13,7 @@ services:
     secrets:
       - portainer_admin_password
     ports:
-      - "9443:9443" # HTTPS web UI (self-signed certificate)
+      - "10000:9443" # HTTPS web UI (self-signed certificate)
     volumes:
       # Rootless Podman API socket, exposed to Portainer as a Docker endpoint.
       - ${XDG_RUNTIME_DIR:-/run/user/1000}/podman/podman.sock:/var/run/docker.sock

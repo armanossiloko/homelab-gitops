@@ -11,7 +11,7 @@ LIBRARIES=(
   "Cartoons|tvshows|/media/cartoons"
 )
 
-URL=http://localhost:8096
+URL=http://localhost:10001
 AUTH='MediaBrowser Client="homelab", Device="bootstrap", DeviceId="homelab-bootstrap", Version="1.0"'
 TOKEN=
 api() { curl -fsS --max-time 30 -H "Authorization: $AUTH${TOKEN:+, Token=\"$TOKEN\"}" -H 'Content-Type: application/json' "$@"; }

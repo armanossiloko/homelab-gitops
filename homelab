@@ -334,9 +334,9 @@ print_urls() {
   local host; host=$(hostname -I 2>/dev/null | awk '{print $1}'); host=${host:-localhost}
   echo
   echo "${B}Services${N}"
-  [[ -f $STACKS_DIR/portainer/compose.yml ]] && echo "  Portainer  https://$host:9443   (user: admin, password: ./homelab secret portainer)"
-  [[ -f $STACKS_DIR/immich/compose.yml ]]    && echo "  Immich     http://$host:2283    (first sign-up becomes admin)"
-  [[ -f $STACKS_DIR/jellyfin/compose.yml ]]  && echo "  Jellyfin   http://$host:8096    (setup wizard on first visit)"
+  [[ -f $STACKS_DIR/portainer/compose.yml ]] && echo "  Portainer  https://$host:10000  (user: admin, password: ./homelab secret portainer)"
+  [[ -f $STACKS_DIR/immich/compose.yml ]]    && echo "  Immich     http://$host:10002   (modulab@modulab / modulab)"
+  [[ -f $STACKS_DIR/jellyfin/compose.yml ]]  && echo "  Jellyfin   http://$host:10001   (modulab / modulab)"
   echo "  Podman Desktop: Containers tab (rootless Podman engine)"
 }
 

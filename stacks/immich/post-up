@@ -2,7 +2,7 @@
 # Creates the Immich admin account on a fresh install (no-op once initialized).
 set -euo pipefail
 
-API=http://localhost:2283/api
+API=http://localhost:10002/api
 for _ in $(seq 90); do
   [[ $(curl -fsS --max-time 5 "$API/server/ping" 2>/dev/null) == *pong* ]] && break
   sleep 2

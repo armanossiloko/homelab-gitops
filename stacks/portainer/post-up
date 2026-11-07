@@ -3,7 +3,7 @@
 # the skipped first-run wizard would otherwise do. Safe to run repeatedly.
 set -euo pipefail
 
-API=https://localhost:9443/api
+API=https://localhost:10000/api
 curl_() { curl -ksS --max-time 10 "$@"; }
 
 for _ in $(seq 60); do

@@ -54,7 +54,7 @@ mounted at `/mnt/media` and bind-mounted at `/modulab`), not on the OS drive.
   and `shows/Show Name/Season 01/Show Name S01E01.mkv`. Cartoons is a TV-show
   library, so use the same layout as `shows`. Jellyfin mounts media read-only.
 * **Immich:** upload from the web UI or the Immich phone app (server URL
-  `http://<host>:2283`). Immich manages the `images` folder itself: it holds
+  `http://<host>:10002`). Immich manages the `images` folder itself: it holds
   originals (`upload/` or `library/`), thumbnails, transcodes and nightly DB
   dumps (`backups/`). Don't copy files into it by hand. To import an existing
   photo folder, add it as an
@@ -64,11 +64,18 @@ mounted at `/mnt/media` and bind-mounted at `/modulab`), not on the OS drive.
 
 ## Services
 
-| Service   | URL                      | Login                                                   |
-| --------- | ------------------------ | ------------------------------------------------------- |
-| Jellyfin  | http://&lt;host&gt;:8096    | `modulab` / `modulab`                                   |
-| Immich    | http://&lt;host&gt;:2283    | `modulab@modulab` / `modulab` (Immich logs in by email) |
-| Portainer | https://&lt;host&gt;:9443   | `admin` / `./homelab secret portainer` (random per machine) |
+| Port      | Service   | URL                        | Login                                                   |
+| --------- | --------- | -------------------------- | ------------------------------------------------------- |
+| **10000** | Portainer | https://&lt;host&gt;:10000    | `admin` / `./homelab secret portainer` (random per machine) |
+| **10001** | Jellyfin  | http://&lt;host&gt;:10001     | `modulab` / `modulab`                                   |
+| **10002** | Immich    | http://&lt;host&gt;:10002     | `modulab@modulab` / `modulab` (Immich logs in by email) |
+
+**Port scheme:** every web UI gets the next free port from **10000** upwards,
+mapped onto the app's own internal port (e.g. `10001:8096`). When you add a
+stack, give it the next number (10003, ...) and add a row here. Only the
+host side changes, so app docs that mention the internal port still apply
+inside the container. Jellyfin's LAN auto-discovery (7359/udp) is not
+published; enter the server address in the apps manually.
 
 Accounts are created automatically on first start by each stack's `post-up`
 hook, so there are no setup wizards. Jellyfin also gets the *Movies*, *Shows*
