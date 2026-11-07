@@ -1,0 +1,29 @@
+# Portainer CE — web UI for managing the rootless Podman engine.
+# https://docs.portainer.io/start/install-ce/server/podman/linux
+name: portainer
+
+services:
+  portainer:
+    container_name: portainer
+    image: docker.io/portainer/portainer-ce:lts
+    restart: always
+    # The admin account is created from the generated password in .env, so
+    # there is no first-run wizard (and no 5-minute setup timeout).
+    command: --admin-password-file /run/secrets/portainer_admin_password
+    secrets:
+      - portainer_admin_password
+    ports:
+      - "9443:9443" # HTTPS web UI (self-signed certificate)
+    volumes:
+      # Rootless Podman API socket, exposed to Portainer as a Docker endpoint.
+      - ${XDG_RUNTIME_DIR:-/run/user/1000}/podman/podman.sock:/var/run/docker.sock
+      - portainer_data:/data
+    security_opt:
+      - label=disable
+
+secrets:
+  portainer_admin_password:
+    environment: PORTAINER_ADMIN_PASSWORD
+
+volumes:
+  portainer_data:

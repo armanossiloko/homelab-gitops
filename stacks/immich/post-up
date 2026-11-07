@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Creates the Immich admin account on a fresh install (no-op once initialized).
+set -euo pipefail
+
+API=http://localhost:2283/api
+for _ in $(seq 90); do
+  [[ $(curl -fsS --max-time 5 "$API/server/ping" 2>/dev/null) == *pong* ]] && break
+  sleep 2
+done
+
+if curl -fsS "$API/server/config" | grep -q '"isInitialized":true'; then
+  exit 0
+fi
+
+body=$(printf '{"email":"%s","password":"%s","name":"%s"}' \
+  "$IMMICH_ADMIN_EMAIL" "$IMMICH_ADMIN_PASSWORD" "${IMMICH_ADMIN_NAME:-admin}")
+curl -fsS -o /dev/null -X POST "$API/auth/admin-sign-up" -H 'Content-Type: application/json' -d "$body"
+echo "created Immich admin $IMMICH_ADMIN_EMAIL"

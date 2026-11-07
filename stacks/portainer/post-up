@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Registers the local Podman engine as Portainer's "local" environment, which
+# the skipped first-run wizard would otherwise do. Safe to run repeatedly.
+set -euo pipefail
+
+API=https://localhost:9443/api
+curl_() { curl -ksS --max-time 10 "$@"; }
+
+for _ in $(seq 60); do
+  curl_ -o /dev/null "$API/system/status" 2>/dev/null && break
+  sleep 2
+done
+
+jwt=$(curl_ "$API/auth" -H 'Content-Type: application/json' \
+  -d "{\"username\":\"admin\",\"password\":\"$PORTAINER_ADMIN_PASSWORD\"}" |
+  sed -n 's/.*"jwt":"\([^"]*\)".*/\1/p')
+if [[ -z $jwt ]]; then
+  echo "could not log in as admin (password changed in the UI? skipping)" >&2
+  exit 0
+fi
+
+if [[ $(curl_ "$API/endpoints" -H "Authorization: Bearer $jwt") != "[]" ]]; then
+  exit 0 # an environment already exists
+fi
+
+curl_ -o /dev/null -X POST "$API/endpoints" -H "Authorization: Bearer $jwt" \
+  -F Name=local -F EndpointCreationType=1
+echo "registered the local Podman environment in Portainer"

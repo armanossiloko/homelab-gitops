@@ -1,0 +1,371 @@
+#!/usr/bin/env bash
+# homelab — GitOps manager for rootless Podman compose stacks.
+#
+# Every directory in stacks/ that contains a compose.yml is one stack. The git
+# repo is the source of truth: `homelab sync` (run by a systemd timer) pulls new
+# commits and applies only the stacks whose files changed. Removed stacks are
+# taken down (their data is kept).
+#
+# Run `./homelab help` for commands.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+STACKS_DIR="$ROOT/stacks"
+LOCAL_CONF="$ROOT/.homelab.env"
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+export PATH="$HOME/.local/bin:$PATH"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+PODMAN_SOCK="$XDG_RUNTIME_DIR/podman/podman.sock"
+
+# ---------------------------------------------------------------- utilities --
+
+if [[ -t 1 ]]; then B=$'\e[1m' G=$'\e[32m' Y=$'\e[33m' R=$'\e[31m' N=$'\e[0m'; else B= G= Y= R= N=; fi
+log()  { printf '%s==>%s %s\n' "$B$G" "$N" "$*"; }
+warn() { printf '%swarn:%s %s\n' "$B$Y" "$N" "$*" >&2; }
+die()  { printf '%serror:%s %s\n' "$B$R" "$N" "$*" >&2; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Machine-local settings (gitignored). Defaults can be overridden by exporting
+# the variable before the first bootstrap, e.g. HOMELAB_DATA=/mnt/big ./bootstrap.sh
+load_local_conf() {
+  if [[ ! -f $LOCAL_CONF ]]; then
+    cat >"$LOCAL_CONF" <<EOF
+# Machine-local homelab settings (not committed). Created by ./homelab.
+# Root directory for persistent service data (one subfolder per stack).
+HOMELAB_DATA=${HOMELAB_DATA:-$HOME/homelab-data}
+# How often the sync timer checks git for new commits (systemd time span).
+HOMELAB_SYNC_INTERVAL=${HOMELAB_SYNC_INTERVAL:-5min}
+EOF
+  fi
+  # shellcheck disable=SC1090
+  source "$LOCAL_CONF"
+  : "${HOMELAB_DATA:=$HOME/homelab-data}" "${HOMELAB_SYNC_INTERVAL:=5min}"
+}
+
+# All stacks currently defined in the working tree, sorted.
+all_stacks() {
+  local f
+  for f in "$STACKS_DIR"/*/compose.yml; do
+    [[ -e $f ]] && basename "$(dirname "$f")"
+  done
+}
+
+resolve_stacks() { # args → validated stack names (default: all)
+  if (($# == 0)); then all_stacks; return; fi
+  local s
+  for s in "$@"; do
+    [[ -f $STACKS_DIR/$s/compose.yml ]] || die "unknown stack '$s' (have: $(all_stacks | tr '\n' ' '))"
+    echo "$s"
+  done
+}
+
+# Pick a compose implementation. docker-compose talks to Podman via DOCKER_HOST,
+# which also keeps it away from any Docker daemon running on the same machine.
+COMPOSE=()
+find_compose() {
+  ((${#COMPOSE[@]})) && return
+  if have docker-compose; then COMPOSE=(docker-compose)
+  elif have docker && docker compose version >/dev/null 2>&1; then COMPOSE=(docker compose)
+  elif have podman-compose; then COMPOSE=(podman-compose)
+  else die "no compose tool found; run ./bootstrap.sh to install one"
+  fi
+}
+
+compose() { # compose <stack> <args...>
+  local s=$1; shift
+  find_compose
+  DOCKER_HOST="unix://$PODMAN_SOCK" "${COMPOSE[@]}" \
+    --project-name "$s" --project-directory "$STACKS_DIR/$s" \
+    -f "$STACKS_DIR/$s/compose.yml" "$@"
+}
+
+ensure_socket() {
+  [[ -S $PODMAN_SOCK ]] && return
+  systemctl --user enable --now podman.socket >/dev/null 2>&1 || true
+  [[ -S $PODMAN_SOCK ]] || die "Podman API socket not available at $PODMAN_SOCK (try: systemctl --user enable --now podman.socket)"
+}
+
+# --------------------------------------------------------- env generation --
+
+random_secret() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32 || true; }
+
+host_tz() {
+  timedatectl show -p Timezone --value 2>/dev/null \
+    || { [[ -f /etc/timezone ]] && cat /etc/timezone; } \
+    || echo Etc/UTC
+}
+
+# Render stacks/<s>/.env.example into stacks/<s>/.env. Existing values are never
+# touched; keys added to the example later are appended. Placeholders:
+#   {{DATA}}   → $HOMELAB_DATA/<stack>     {{HOME}} → $HOME
+#   {{TZ}}     → host timezone             {{UID}}/{{GID}} → your ids
+#   {{RANDOM}} → a fresh 32-char alphanumeric secret
+# Values that use {{DATA}} or {{HOME}} are paths and get created as directories.
+ensure_env() {
+  local s=$1 example="$STACKS_DIR/$1/.env.example" env="$STACKS_DIR/$1/.env"
+  [[ -f $example ]] || return 0
+  [[ -f $env ]] || { : >"$env"; chmod 600 "$env"; log "$s: generating .env"; }
+  local line key val tz
+  tz=$(host_tz)
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ $line =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+    key=${BASH_REMATCH[1]} val=${BASH_REMATCH[2]}
+    grep -q "^$key=" "$env" && continue
+    local is_path=0
+    [[ $val == *'{{DATA}}'* || $val == *'{{HOME}}'* ]] && is_path=1
+    val=${val//'{{DATA}}'/$HOMELAB_DATA/$s}
+    val=${val//'{{HOME}}'/$HOME}
+    val=${val//'{{TZ}}'/$tz}
+    val=${val//'{{UID}}'/$(id -u)}
+    val=${val//'{{GID}}'/$(id -g)}
+    while [[ $val == *'{{RANDOM}}'* ]]; do val=${val/'{{RANDOM}}'/$(random_secret)}; done
+    printf '%s=%s\n' "$key" "$val" >>"$env"
+    if ((is_path)); then mkdir -p "$val"; fi
+  done <"$example"
+  return 0
+}
+
+# ------------------------------------------------------------- operations --
+
+stack_up() { # stack_up <stack> [--pull]
+  local s=$1
+  ensure_env "$s"
+  if [[ ${2:-} == --pull ]]; then log "$s: pulling images"; compose "$s" pull --quiet; fi
+  log "$s: up"
+  compose "$s" up -d --remove-orphans
+  run_hook "$s" post-up
+}
+
+# Optional, idempotent per-stack hook (e.g. stacks/portainer/post-up): runs from
+# the stack directory with the stack's .env variables exported.
+run_hook() {
+  local s=$1 hook="$STACKS_DIR/$1/$2"
+  [[ -x $hook ]] || return 0
+  log "$s: running $2 hook"
+  (
+    cd "$STACKS_DIR/$s"
+    set -a
+    # shellcheck disable=SC1091
+    [[ -f .env ]] && source .env
+    set +a
+    "$hook"
+  ) || warn "$s: $2 hook failed"
+}
+
+stack_down() { # works even when the stack's files are gone from the repo
+  local s=$1
+  log "$s: down (volumes and data are kept)"
+  find_compose
+  if [[ -f $STACKS_DIR/$s/compose.yml ]]; then
+    compose "$s" down --remove-orphans
+  else
+    DOCKER_HOST="unix://$PODMAN_SOCK" "${COMPOSE[@]}" --project-name "$s" down --remove-orphans
+  fi
+}
+
+cmd_up()      { ensure_socket; load_local_conf; local s; for s in $(resolve_stacks "$@"); do stack_up "$s"; done; }
+cmd_update()  { ensure_socket; load_local_conf; local s; for s in $(resolve_stacks "$@"); do stack_up "$s" --pull; done; }
+cmd_down()    { ensure_socket; local s; for s in $(resolve_stacks "$@"); do stack_down "$s"; done; }
+cmd_restart() { ensure_socket; local s; for s in $(resolve_stacks "$@"); do compose "$s" restart; done; }
+cmd_logs()    { [[ $# -ge 1 ]] || die "usage: homelab logs <stack> [service]"; local s=$1; shift; resolve_stacks "$s" >/dev/null; compose "$s" logs -f --tail=100 "$@"; }
+cmd_compose() { [[ $# -ge 1 ]] || die "usage: homelab compose <stack> <compose args...>"; local s=$1; shift; resolve_stacks "$s" >/dev/null; compose "$s" "$@"; }
+
+cmd_status() {
+  ensure_socket
+  local s
+  {
+    printf 'STACK\tCONTAINER\tSTATUS\n'
+    for s in $(all_stacks); do
+      podman ps -a --filter "label=com.docker.compose.project=$s" --format "$s"$'\t{{.Names}}\t{{.Status}}' | sort -k2
+    done
+  } | column -t -s $'\t'
+  echo
+  if systemctl --user is-active -q homelab-sync.timer 2>/dev/null; then
+    echo "autosync: on  (next: $(systemctl --user show homelab-sync.timer -p NextElapseUSecRealtime --value))"
+  else
+    echo "autosync: off"
+  fi
+  echo "revision: $(git -C "$ROOT" log -1 --format='%h %s (%cr)' 2>/dev/null || echo 'n/a')"
+}
+
+# Pull new commits from the upstream branch and apply what changed.
+cmd_sync() {
+  cd "$ROOT"
+  git rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1 || { warn "branch has no upstream; nothing to sync"; return 0; }
+  git fetch --quiet
+  local old new
+  old=$(git rev-parse HEAD) new=$(git rev-parse '@{u}')
+  if [[ $old == "$new" ]]; then echo "up to date at ${old:0:7}"; return 0; fi
+  if ! git merge-base --is-ancestor "$old" "$new"; then
+    die "local branch has diverged from upstream; resolve manually (sync only fast-forwards)"
+  fi
+  git merge --ff-only --quiet '@{u}' || die "fast-forward failed (uncommitted local changes?)"
+  log "updated ${old:0:7} → ${new:0:7}"
+  # Re-exec so the apply step runs with the freshly pulled version of this script.
+  exec "$ROOT/homelab" apply "$old" "$new"
+}
+
+# Apply the stack changes between two commits (used by sync).
+cmd_apply() {
+  [[ $# -eq 2 ]] || die "usage: homelab apply <old-rev> <new-rev>"
+  ensure_socket; load_local_conf
+  local s changed rc=0
+  changed=$(git -C "$ROOT" diff --name-only "$1" "$2" -- stacks/ | awk -F/ 'NF>2 {print $2}' | sort -u)
+  [[ -n $changed ]] || { echo "no stack changes"; return 0; }
+  for s in $changed; do
+    if [[ -f $STACKS_DIR/$s/compose.yml ]]; then
+      stack_up "$s" --pull || { warn "$s: failed to apply"; rc=1; }
+    else
+      stack_down "$s" || { warn "$s: failed to take down"; rc=1; }
+    fi
+  done
+  return $rc
+}
+
+cmd_autosync() {
+  case ${1:-status} in
+    on)
+      load_local_conf
+      mkdir -p "$UNIT_DIR"
+      cat >"$UNIT_DIR/homelab-sync.service" <<EOF
+[Unit]
+Description=Homelab GitOps sync ($ROOT)
+Wants=network-online.target
+After=network-online.target podman.socket
+
+[Service]
+Type=oneshot
+WorkingDirectory=$ROOT
+Environment=PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=$ROOT/homelab sync
+EOF
+      cat >"$UNIT_DIR/homelab-sync.timer" <<EOF
+[Unit]
+Description=Run homelab GitOps sync every $HOMELAB_SYNC_INTERVAL
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=$HOMELAB_SYNC_INTERVAL
+RandomizedDelaySec=30s
+
+[Install]
+WantedBy=timers.target
+EOF
+      systemctl --user daemon-reload
+      systemctl --user enable --now homelab-sync.timer >/dev/null
+      log "autosync on: every $HOMELAB_SYNC_INTERVAL (logs: journalctl --user -u homelab-sync)"
+      ;;
+    off)
+      systemctl --user disable --now homelab-sync.timer >/dev/null 2>&1 || true
+      log "autosync off"
+      ;;
+    status) systemctl --user list-timers homelab-sync.timer --no-pager ;;
+    *) die "usage: homelab autosync on|off|status" ;;
+  esac
+}
+
+# One-shot host setup + deploy. Idempotent: safe to re-run at any time.
+cmd_bootstrap() {
+  log "checking prerequisites"
+  if ! have podman; then
+    if have apt-get; then log "installing podman (sudo)"; sudo apt-get update -qq && sudo apt-get install -y podman
+    elif have dnf; then log "installing podman (sudo)"; sudo dnf install -y podman
+    else die "please install podman first"
+    fi
+  fi
+  have git || die "please install git"
+  find_compose 2>/dev/null || install_compose
+
+  log "enabling Podman API socket and container auto-start"
+  systemctl --user enable --now podman.socket >/dev/null
+  systemctl --user enable podman-restart.service >/dev/null 2>&1 || warn "could not enable podman-restart.service"
+  # Linger starts user services at boot, before anyone logs in.
+  if [[ $(loginctl show-user "$USER" -p Linger --value 2>/dev/null) != yes ]]; then
+    loginctl enable-linger "$USER" 2>/dev/null || sudo loginctl enable-linger "$USER" \
+      || warn "could not enable linger; containers will start at login instead of at boot"
+  fi
+
+  load_local_conf
+  mkdir -p "$HOMELAB_DATA"
+  log "data directory: $HOMELAB_DATA"
+  cmd_up
+  if git -C "$ROOT" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+    cmd_autosync on
+  else
+    warn "no git upstream configured; autosync not enabled (push to a remote, then: ./homelab autosync on)"
+  fi
+  echo
+  cmd_status
+  print_urls
+}
+
+install_compose() {
+  local arch url dest="$HOME/.local/bin/docker-compose"
+  case $(uname -m) in x86_64) arch=x86_64 ;; aarch64|arm64) arch=aarch64 ;; *) die "unsupported arch $(uname -m)" ;; esac
+  url="https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$arch"
+  log "installing docker-compose to $dest"
+  mkdir -p "$(dirname "$dest")"
+  local tmp; tmp=$(mktemp -d)
+  curl -fsSL -o "$tmp/docker-compose-linux-$arch" "$url"
+  curl -fsSL -o "$tmp/sum" "$url.sha256"
+  (cd "$tmp" && sha256sum -c sum >/dev/null) || die "docker-compose checksum mismatch"
+  install -m 755 "$tmp/docker-compose-linux-$arch" "$dest"
+  rm -rf "$tmp"
+  COMPOSE=("$dest")
+}
+
+print_urls() {
+  local host; host=$(hostname -I 2>/dev/null | awk '{print $1}'); host=${host:-localhost}
+  echo
+  echo "${B}Services${N}"
+  [[ -f $STACKS_DIR/portainer/compose.yml ]] && echo "  Portainer  https://$host:9443   (user: admin, password: ./homelab secret portainer)"
+  [[ -f $STACKS_DIR/immich/compose.yml ]]    && echo "  Immich     http://$host:2283    (first sign-up becomes admin)"
+  [[ -f $STACKS_DIR/jellyfin/compose.yml ]]  && echo "  Jellyfin   http://$host:8096    (setup wizard on first visit)"
+  echo "  Podman Desktop: Containers tab (rootless Podman engine)"
+}
+
+cmd_secret() {
+  case ${1:-} in
+    portainer) grep '^PORTAINER_ADMIN_PASSWORD=' "$STACKS_DIR/portainer/.env" | cut -d= -f2- ;;
+    *) die "usage: homelab secret portainer" ;;
+  esac
+}
+
+usage() {
+  cat <<EOF
+Usage: ./homelab <command> [stack...]
+
+  bootstrap         set up this machine and deploy all stacks (idempotent)
+  up [stack...]     create/update stacks (default: all)
+  update [stack...] pull newer images, then up
+  down [stack...]   stop and remove containers (data is kept)
+  restart [stack..] restart containers
+  status            show containers, autosync state and git revision
+  logs <stack> [s]  follow logs
+  compose <stack> … run any compose command against a stack
+  sync              pull from git and apply changed stacks (what the timer runs)
+  autosync on|off   install/remove the systemd sync timer
+  secret portainer  print the generated Portainer admin password
+  urls              print service URLs
+
+Stacks: $(all_stacks | tr '\n' ' ')
+EOF
+}
+
+case ${1:-help} in
+  bootstrap) shift; cmd_bootstrap "$@" ;;
+  up)        shift; cmd_up "$@" ;;
+  update)    shift; cmd_update "$@" ;;
+  down)      shift; cmd_down "$@" ;;
+  restart)   shift; cmd_restart "$@" ;;
+  status|ps) shift; cmd_status ;;
+  logs)      shift; cmd_logs "$@" ;;
+  compose)   shift; cmd_compose "$@" ;;
+  sync)      shift; cmd_sync ;;
+  apply)     shift; cmd_apply "$@" ;;
+  autosync)  shift; cmd_autosync "$@" ;;
+  secret)    shift; cmd_secret "$@" ;;
+  urls)      print_urls ;;
+  help|-h|--help) usage ;;
+  *) usage >&2; exit 1 ;;
+esac

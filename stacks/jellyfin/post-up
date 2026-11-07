@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Completes the Jellyfin startup wizard on a fresh install: creates the admin
+# user and adds the Videos and Music libraries. No-op once the wizard is done.
+set -euo pipefail
+
+URL=http://localhost:8096
+AUTH='MediaBrowser Client="homelab", Device="bootstrap", DeviceId="homelab-bootstrap", Version="1.0"'
+api() { curl -fsS --max-time 30 -H "Authorization: $AUTH${TOKEN:+, Token=\"$TOKEN\"}" -H 'Content-Type: application/json' "$@"; }
+
+for _ in $(seq 90); do
+  [[ $(curl -fsS --max-time 5 "$URL/health" 2>/dev/null) == Healthy ]] && break
+  sleep 2
+done
+
+if api "$URL/System/Info/Public" | grep -q '"StartupWizardCompleted":true'; then
+  exit 0
+fi
+
+TOKEN=
+api -X POST "$URL/Startup/Configuration" \
+  -d '{"UICulture":"en-US","MetadataCountryCode":"US","PreferredMetadataLanguage":"en"}'
+api "$URL/Startup/User" >/dev/null # materializes the initial user
+api -X POST "$URL/Startup/User" \
+  -d "$(printf '{"Name":"%s","Password":"%s"}' "$JELLYFIN_ADMIN_USER" "$JELLYFIN_ADMIN_PASSWORD")"
+api -X POST "$URL/Startup/RemoteAccess" -d '{"EnableRemoteAccess":true,"EnableAutomaticPortMapping":false}'
+api -X POST "$URL/Startup/Complete"
+echo "created Jellyfin admin $JELLYFIN_ADMIN_USER"
+
+TOKEN=$(api -X POST "$URL/Users/AuthenticateByName" \
+  -d "$(printf '{"Username":"%s","Pw":"%s"}' "$JELLYFIN_ADMIN_USER" "$JELLYFIN_ADMIN_PASSWORD")" |
+  sed -n 's/.*"AccessToken":"\([^"]*\)".*/\1/p')
+[[ -n $TOKEN ]] || { echo "login failed; add libraries in the UI" >&2; exit 0; }
+
+add_library() { # name collectionType path
+  api -X POST "$URL/Library/VirtualFolders?name=$1&collectionType=$2&paths=$3&refreshLibrary=true" \
+    -d "{\"LibraryOptions\":{\"PathInfos\":[{\"Path\":\"$3\"}]}}"
+}
+add_library Videos movies /media/videos
+add_library Music music /media/music
+echo "added Jellyfin libraries: Videos (/media/videos), Music (/media/music)"

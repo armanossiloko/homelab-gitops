@@ -1,0 +1,24 @@
+# Jellyfin — media server.
+# https://jellyfin.org/docs/general/installation/container
+name: jellyfin
+
+services:
+  jellyfin:
+    container_name: jellyfin
+    image: docker.io/jellyfin/jellyfin:latest
+    restart: always
+    ports:
+      - "8096:8096/tcp" # web UI
+      - "7359:7359/udp" # client auto-discovery on the LAN
+    environment:
+      TZ: ${TZ:-Etc/UTC}
+    devices:
+      # Intel iGPU for hardware transcoding (QSV / VA-API). Enable it in
+      # Dashboard → Playback → Transcoding. Remove this if there is no /dev/dri.
+      - /dev/dri:/dev/dri
+    volumes:
+      - ${JELLYFIN_CONFIG}:/config
+      - ${JELLYFIN_CACHE}:/cache
+      # Media libraries are mounted read-only. Add more lines as needed.
+      - ${MEDIA_VIDEOS}:/media/videos:ro
+      - ${MEDIA_MUSIC}:/media/music:ro
