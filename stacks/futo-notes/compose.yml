@@ -1,0 +1,22 @@
+# FUTO Notes: sync server for the end-to-end encrypted FUTO Notes apps.
+# The server stores encrypted blobs plus a SQLite index; it can't read notes.
+# In the app: Settings → Self-hosted sync → server URL + FUTO_NOTES_PASSWORD.
+name: futo-notes
+
+services:
+  futo-notes:
+    container_name: futo-notes
+    image: docker.io/futotech/notes-server:stable
+    restart: always
+    ports:
+      - "10003:3000"
+    environment:
+      PORT: "3000"
+      AUTH_MODE: password
+      FUTO_NOTES_PASSWORD: ${FUTO_NOTES_PASSWORD:?set FUTO_NOTES_PASSWORD in stacks/futo-notes/.env}
+      # Secure-only cookies would break logging in over plain http on the LAN.
+      COOKIE_SECURE: "false"
+      BLOB_DIR: /data/blobs
+      BLOB_GC_ENABLED: "true"
+    volumes:
+      - ${FUTO_NOTES_DATA}:/data

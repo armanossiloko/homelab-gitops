@@ -375,14 +375,18 @@ print_urls() {
   [[ -f $STACKS_DIR/portainer/compose.yml ]] && echo "  Portainer  https://$host:10000  (user: admin, password: ./homelab secret portainer)"
   [[ -f $STACKS_DIR/immich/compose.yml ]]    && echo "  Immich     http://$host:10002   (modulab@modulab / modulab)"
   [[ -f $STACKS_DIR/jellyfin/compose.yml ]]  && echo "  Jellyfin   http://$host:10001   (modulab / modulab)"
+  [[ -f $STACKS_DIR/futo-notes/compose.yml ]] && echo "  FUTO Notes http://$host:10003   (sync password: ./homelab secret futo-notes)"
   echo "  Podman Desktop: Containers tab (rootless Podman engine)"
 }
 
 cmd_secret() {
+  local key
   case ${1:-} in
-    portainer) grep '^PORTAINER_ADMIN_PASSWORD=' "$STACKS_DIR/portainer/.env" | cut -d= -f2- ;;
-    *) die "usage: homelab secret portainer" ;;
+    portainer)  key=PORTAINER_ADMIN_PASSWORD ;;
+    futo-notes) key=FUTO_NOTES_PASSWORD ;;
+    *) die "usage: homelab secret portainer|futo-notes" ;;
   esac
+  grep "^$key=" "$STACKS_DIR/$1/.env" | cut -d= -f2-
 }
 
 usage() {
@@ -399,7 +403,7 @@ Usage: ./homelab <command> [stack...]
   compose <stack> … run any compose command against a stack
   sync              pull from git and apply changed stacks (what the timer runs)
   autosync on|off   install/remove the systemd sync timer
-  secret portainer  print the generated Portainer admin password
+  secret <stack>    print a generated password (portainer, futo-notes)
   urls              print service URLs
 
 Stacks: $(all_stacks | tr '\n' ' ')
