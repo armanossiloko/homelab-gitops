@@ -74,15 +74,15 @@ mounted at `/mnt/media` and bind-mounted at `/modulab`), not on the OS drive.
 | **10002** | Immich    | http://&lt;host&gt;:10002     | `modulab@modulab` / `modulab` (Immich logs in by email) |
 | **10003** | FUTO Notes | http://&lt;host&gt;:10003    | sync password from `./homelab secret futo-notes` (random per machine) |
 
-**From the internet:** Immich (**https://immich.fakegamedevelopers.com**) and
-FUTO Notes (**https://notes.fakegamedevelopers.com**) are also published
+**From the internet:** Immich (**https://immich.ossiloko.win**) and
+FUTO Notes (**https://futo-notes.ossiloko.win**) are also published
 through a Cloudflare Tunnel (see [Cloudflare Tunnel](#cloudflare-tunnel)).
 Jellyfin and Portainer are LAN-only.
 
 **FUTO Notes** is a sync server for the end-to-end encrypted
 [FUTO Notes](https://notes.futo.org) apps; the server only stores encrypted
 data. In the app, open *Settings → Self-hosted sync*, then enter
-`https://notes.fakegamedevelopers.com` and the sync password. It's random
+`https://futo-notes.ossiloko.win` and the sync password. It's random
 rather than `modulab` because the server is on the internet.
 
 **Port scheme:** every web UI gets the next free port from **10000** upwards,
@@ -194,7 +194,7 @@ stacks/
   immich/               Immich server, ML, Valkey, Postgres (+ upstream hwaccel files)
   jellyfin/             Jellyfin with Intel iGPU passthrough
   futo-notes/           FUTO Notes sync server (encrypted blobs + SQLite)
-  cloudflared/          Cloudflare Tunnel; config.yml maps public hostnames
+  cloudflared/          Cloudflare Tunnel; config.template.yml maps public hostnames
 .homelab.env            machine-local settings (gitignored)
 stacks/*/.env           machine-local values and secrets (gitignored)
 ```
@@ -202,18 +202,22 @@ stacks/*/.env           machine-local values and secrets (gitignored)
 ## Cloudflare Tunnel
 
 `stacks/cloudflared` runs a [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
-named `homelab-modulab-800-01` (account *NebuloraCRM*, zone
-`fakegamedevelopers.com`). The tunnel connects out to Cloudflare, so no router
-ports are opened, and Cloudflare provides HTTPS.
+named `homelab-modulab-800-01` (account *NebuloraCRM*). The tunnel connects
+out to Cloudflare, so no router ports are opened, and Cloudflare provides
+HTTPS. The domain is one setting, `HOMELAB_DOMAIN` in `homelab.conf`
+(currently `ossiloko.win`).
 
 | Public hostname                    | Goes to                  |
 | ---------------------------------- | ------------------------ |
-| `immich.fakegamedevelopers.com`    | Immich (`localhost:10002`) |
-| `notes.fakegamedevelopers.com`     | FUTO Notes (`localhost:10003`) |
+| `immich.ossiloko.win`              | Immich (`localhost:10002`) |
+| `futo-notes.ossiloko.win`          | FUTO Notes (`localhost:10003`) |
+| `immich.fakegamedevelopers.com`, `notes.fakegamedevelopers.com` | previous domain, kept during the move |
 
-* **Routing is in git:** [`stacks/cloudflared/config.yml`](stacks/cloudflared/config.yml)
-  (a locally managed tunnel). Edits are applied by the next sync.
-* **Publishing another service:** add an ingress rule to `config.yml`, add a
+* **Routing is in git:** [`stacks/cloudflared/config.template.yml`](stacks/cloudflared/config.template.yml)
+  (a locally managed tunnel). Before each deploy, the `pre-up` hook renders it
+  to `config.yml` (gitignored) with `{{DOMAIN}}` replaced, and the tunnel is
+  recreated whenever the result changes.
+* **Publishing another service:** add an ingress rule to the template, add a
   proxied DNS `CNAME <name> → 6906d45f-8bd1-4cd0-aeea-0627e0013cb1.cfargotunnel.com`
   in Cloudflare, then push. Think twice before publishing admin tools like
   Portainer.
@@ -233,11 +237,24 @@ ports are opened, and Cloudflare provides HTTPS.
 * **Immich's external domain** (used in share links) is set from
   `IMMICH_PUBLIC_URL` in `homelab.conf`.
 
+**Changing the domain:**
+1. Add the new domain to the same Cloudflare account and wait until it's
+   *Active*. A brand-new registration can take a few hours before the TLD
+   publishes it and Cloudflare issues its HTTPS certificate.
+2. Create the proxied CNAMEs (`immich`, `futo-notes`, ...) in the new zone
+   **before** anything looks the names up. Otherwise resolvers cache "not
+   found" for up to 30 minutes.
+3. Set `HOMELAB_DOMAIN` in `homelab.conf` and push. Any change to
+   `homelab.conf` makes sync re-apply every stack. To keep the old names
+   working during the move, add rules for them to the template.
+4. In Immich, set *Administration → Settings → Server → External Domain*.
+5. Repoint the Immich and FUTO Notes apps on every device.
+
 **Uploading through the tunnel:** Cloudflare's free plan rejects uploads over
 **100 MB**, so long phone videos fail over the public URL. In the Immich phone
 app, open *Settings → Networking → Automatic URL switching*, add your home
 Wi-Fi with the local URL `http://192.168.0.50:10002`, and keep
-`https://immich.fakegamedevelopers.com` as the external URL. Phones then back
+`https://immich.ossiloko.win` as the external URL. Phones then back
 up over the LAN at home and use the tunnel only when away.
 
 **Security:** Immich's login page is now reachable by anyone. Give every

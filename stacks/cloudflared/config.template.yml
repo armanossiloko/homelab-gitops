@@ -1,0 +1,30 @@
+# Template for config.yml, which ./homelab renders before every deploy
+# (pre-up hook): {{DOMAIN}} becomes HOMELAB_DOMAIN from homelab.conf.
+# Edit this file, not config.yml (generated, gitignored).
+#
+# To publish another service:
+#   1. add a rule below (above the final catch-all),
+#   2. add a proxied CNAME <name> → 6906d45f-8bd1-4cd0-aeea-0627e0013cb1.cfargotunnel.com
+#      in Cloudflare DNS for the domain,
+#   3. commit and push; sync re-renders and restarts the tunnel.
+# https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/configure-tunnels/local-management/configuration-file/
+tunnel: 6906d45f-8bd1-4cd0-aeea-0627e0013cb1
+
+ingress:
+  - hostname: immich.{{DOMAIN}}
+    service: http://localhost:10002
+
+  # No Cloudflare Access here: the FUTO Notes apps can't complete a login
+  # page. The sync password protects the server; notes are end-to-end encrypted.
+  - hostname: futo-notes.{{DOMAIN}}
+    service: http://localhost:10003
+
+  # Previous domain, kept while devices and share links move to the new one.
+  # Delete these two rules (and their DNS records) when nothing uses them.
+  - hostname: immich.fakegamedevelopers.com
+    service: http://localhost:10002
+  - hostname: notes.fakegamedevelopers.com
+    service: http://localhost:10003
+
+  # Anything else that reaches the tunnel gets a 404.
+  - service: http_status:404
