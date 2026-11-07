@@ -25,8 +25,11 @@ Bootstrap is idempotent (safe to re-run). It:
 2. Enables the rootless Podman API socket (used by Portainer, Podman Desktop and
    compose), `podman-restart.service` and user lingering, so containers come back
    at boot without anyone logging in.
-3. Renders each stack's `.env` from `.env.example` (paths, timezone, random secrets).
-4. Deploys every stack and enables the `homelab-sync` timer.
+3. If the ufw firewall is active, allows the homelab port range (`10000-10099`)
+   from your local subnet only. Otherwise other devices on the network can't
+   reach anything.
+4. Renders each stack's `.env` from `.env.example` (paths, timezone, random secrets).
+5. Deploys every stack and enables the `homelab-sync` timer.
 
 Shared settings live in [`homelab.conf`](homelab.conf). To override them on
 one machine, pass them to bootstrap. They are saved to the gitignored

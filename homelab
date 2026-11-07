@@ -28,7 +28,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # Settings: homelab.conf (tracked, shared defaults) is overridden by .homelab.env
 # (gitignored, this machine only). `bootstrap` saves any HOMELAB_* variable you
 # pass on its command line into .homelab.env, e.g. HOMELAB_MEDIA=/srv/media ./bootstrap.sh
-CONF_VARS=(HOMELAB_DATA HOMELAB_MEDIA HOMELAB_SYNC_INTERVAL)
+CONF_VARS=(HOMELAB_DATA HOMELAB_MEDIA HOMELAB_SYNC_INTERVAL HOMELAB_PORTS)
 SHARED_CONF="$ROOT/homelab.conf"
 
 save_conf_overrides() {
@@ -48,6 +48,7 @@ load_local_conf() {
   # shellcheck disable=SC1090
   [[ -f $LOCAL_CONF ]] && source "$LOCAL_CONF"
   : "${HOMELAB_DATA:=$HOME/homelab-data}" "${HOMELAB_MEDIA:=$HOME/media}" "${HOMELAB_SYNC_INTERVAL:=5min}"
+  : "${HOMELAB_PORTS:=10000:10099}"
 }
 
 # All stacks currently defined in the working tree, sorted.
@@ -304,6 +305,7 @@ cmd_bootstrap() {
   mkdir -p "$HOMELAB_MEDIA" || die "cannot create $HOMELAB_MEDIA (set HOMELAB_MEDIA, e.g. HOMELAB_MEDIA=~/media ./bootstrap.sh)"
   log "data directory:  $HOMELAB_DATA"
   log "media directory: $HOMELAB_MEDIA"
+  open_firewall
   cmd_up
   if git -C "$ROOT" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
     cmd_autosync on
@@ -313,6 +315,21 @@ cmd_bootstrap() {
   echo
   cmd_status
   print_urls
+}
+
+# If ufw is active it drops incoming traffic by default, which hides every
+# service from other devices. Allow the homelab port range from the local
+# subnet only (needs sudo; ufw skips rules that already exist).
+open_firewall() {
+  have ufw && systemctl is-active -q ufw 2>/dev/null || return 0
+  grep -q '^ENABLED=yes' /etc/ufw/ufw.conf 2>/dev/null || return 0
+  local dev subnet
+  dev=$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}')
+  subnet=$(ip -4 route show dev "$dev" scope link proto kernel 2>/dev/null | awk '{print $1; exit}')
+  if [[ -z $subnet ]]; then warn "could not detect the LAN subnet; open ports $HOMELAB_PORTS in ufw yourself"; return 0; fi
+  log "firewall: allowing tcp $HOMELAB_PORTS from $subnet (sudo)"
+  sudo ufw allow from "$subnet" to any port "$HOMELAB_PORTS" proto tcp comment 'homelab web UIs (LAN only)' >/dev/null \
+    || warn "could not update ufw; other devices may not reach the services"
 }
 
 install_compose() {
