@@ -181,7 +181,7 @@ cmd_status() {
   } | column -t -s $'\t'
   echo
   if systemctl --user is-active -q homelab-sync.timer 2>/dev/null; then
-    echo "autosync: on  (next: $(systemctl --user show homelab-sync.timer -p NextElapseUSecRealtime --value))"
+    echo "autosync: on  (next: $(systemctl --user list-timers homelab-sync.timer --no-legend | awk '{print $2, $3}'))"
   else
     echo "autosync: off"
   fi
