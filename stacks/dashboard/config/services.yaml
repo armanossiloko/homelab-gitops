@@ -1,0 +1,70 @@
+# Dashboard tiles. https://gethomepage.dev/configs/services/
+#
+# Each tile shows its container's state (`server` + `container`, from the
+# Podman socket; click it for CPU/RAM) and, where there's a `siteMonitor`, an
+# HTTP check with response time. Checks run from the dashboard container on
+# host networking, so localhost:<port> is the app's published port.
+#
+# {{HOMEPAGE_VAR_HOST}} and {{HOMEPAGE_VAR_DOMAIN}} are filled in from .env,
+# which the pre-up hook writes (LAN address and HOMELAB_DOMAIN).
+#
+# When you add a stack, add its tile here too.
+
+- Apps:
+    - Jellyfin:
+        icon: jellyfin.svg
+        href: http://{{HOMEPAGE_VAR_HOST}}:10001
+        description: Movies, shows and cartoons
+        server: podman
+        container: jellyfin
+        siteMonitor: http://localhost:10001/health
+
+    - Immich:
+        icon: immich.svg
+        href: http://{{HOMEPAGE_VAR_HOST}}:10002
+        description: Photos and videos · immich.{{HOMEPAGE_VAR_DOMAIN}}
+        server: podman
+        container: immich_server
+        siteMonitor: http://localhost:10002/api/server/ping
+
+    - FUTO Notes:
+        icon: mdi-notebook-outline
+        href: http://{{HOMEPAGE_VAR_HOST}}:10003
+        description: Notes sync server · futo-notes.{{HOMEPAGE_VAR_DOMAIN}}
+        server: podman
+        container: futo-notes
+        siteMonitor: http://localhost:10003/health
+
+    - Portainer:
+        icon: portainer.svg
+        href: https://{{HOMEPAGE_VAR_HOST}}:10000
+        description: Containers on the Podman engine
+        server: podman
+        container: portainer
+        siteMonitor: https://localhost:10000/api/system/status
+
+- Behind the scenes:
+    - Cloudflare Tunnel:
+        icon: cloudflare.svg
+        description: Public access; checks Immich through the tunnel
+        server: podman
+        container: cloudflared
+        siteMonitor: https://immich.{{HOMEPAGE_VAR_DOMAIN}}/api/server/ping
+
+    - Immich database:
+        icon: postgres.svg
+        description: Postgres with vector search
+        server: podman
+        container: immich_postgres
+
+    - Immich machine learning:
+        icon: mdi-brain
+        description: Face recognition and smart search
+        server: podman
+        container: immich_machine_learning
+
+    - Immich cache:
+        icon: redis.svg
+        description: Valkey job queue
+        server: podman
+        container: immich_redis
