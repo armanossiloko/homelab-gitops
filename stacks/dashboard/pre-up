@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Writes the values Homepage needs into .env (replacing old ones on every run):
+#   HOMEPAGE_VAR_HOST      address in the tile links (HOMELAB_HOST, detected by
+#                          ./homelab unless set in .homelab.env)
+#   HOMEPAGE_VAR_DOMAIN    HOMELAB_DOMAIN, for the public URLs
+#   HOMEPAGE_ALLOWED_HOSTS Host headers Homepage answers to (it rejects others)
+# If the LAN address changes, run `./homelab up dashboard` to refresh the links.
+set -euo pipefail
+
+PORT=10004 # keep in sync with compose.yml
+[[ -n ${HOMELAB_HOST:-} ]] || { echo "could not detect this machine's LAN address; set HOMELAB_HOST in .homelab.env" >&2; exit 1; }
+
+name=$(hostname)
+allowed="$HOMELAB_HOST:$PORT,$name:$PORT,$name.local:$PORT,localhost:$PORT,127.0.0.1:$PORT"
+
+set_env() {
+  if grep -q "^$1=" .env 2>/dev/null; then
+    sed -i "s|^$1=.*|$1=$2|" .env
+  else
+    printf '%s=%s\n' "$1" "$2" >>.env
+  fi
+}
+set_env HOMEPAGE_VAR_HOST "$HOMELAB_HOST"
+set_env HOMEPAGE_VAR_DOMAIN "${HOMELAB_DOMAIN:-}"
+set_env HOMEPAGE_ALLOWED_HOSTS "$allowed"
+echo "dashboard links point at $HOMELAB_HOST"

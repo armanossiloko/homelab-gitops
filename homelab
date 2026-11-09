@@ -28,7 +28,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # Settings: homelab.conf (tracked, shared defaults) is overridden by .homelab.env
 # (gitignored, this machine only). `bootstrap` saves any HOMELAB_* variable you
 # pass on its command line into .homelab.env, e.g. HOMELAB_MEDIA=/srv/media ./bootstrap.sh
-CONF_VARS=(HOMELAB_DATA HOMELAB_MEDIA HOMELAB_SYNC_INTERVAL HOMELAB_PORTS)
+CONF_VARS=(HOMELAB_DATA HOMELAB_MEDIA HOMELAB_SYNC_INTERVAL HOMELAB_PORTS HOMELAB_HOST)
 SHARED_CONF="$ROOT/homelab.conf"
 
 save_conf_overrides() {
@@ -49,6 +49,16 @@ load_local_conf() {
   [[ -f $LOCAL_CONF ]] && source "$LOCAL_CONF"
   : "${HOMELAB_DATA:=$HOME/homelab-data}" "${HOMELAB_MEDIA:=$HOME/media}" "${HOMELAB_SYNC_INTERVAL:=5min}"
   : "${HOMELAB_PORTS:=10000:10099}"
+}
+
+# This machine's LAN address, for links shown to people (HOMELAB_HOST overrides
+# it): the source address of the default route, so not a container bridge.
+lan_host() {
+  [[ -n ${HOMELAB_HOST:-} ]] && { echo "$HOMELAB_HOST"; return; }
+  local ip
+  ip=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p')
+  [[ -n $ip ]] || ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+  echo "${ip:-localhost}"
 }
 
 # All stacks currently defined in the working tree, sorted.
@@ -165,7 +175,8 @@ stack_up() {
 
 # Optional, idempotent per-stack hook (stacks/<stack>/pre-up or post-up): runs
 # from the stack directory with homelab.conf, .homelab.env and the stack's .env
-# exported. Returns the hook's status (after warning on failure).
+# exported, plus HOMELAB_HOST (see lan_host). Returns the hook's status (after
+# warning on failure).
 run_hook() {
   local s=$1 hook="$STACKS_DIR/$1/$2" rc=0
   [[ -x $hook ]] || return 0
@@ -177,6 +188,7 @@ run_hook() {
     [[ -f $SHARED_CONF ]] && source "$SHARED_CONF"
     # shellcheck disable=SC1090
     [[ -f $LOCAL_CONF ]] && source "$LOCAL_CONF"
+    HOMELAB_HOST=$(lan_host)
     # shellcheck disable=SC1091
     [[ -f .env ]] && source .env
     set +a
@@ -378,9 +390,10 @@ install_compose() {
 }
 
 print_urls() {
-  local host; host=$(hostname -I 2>/dev/null | awk '{print $1}'); host=${host:-localhost}
+  local host; host=$(lan_host)
   echo
   echo "${B}Services${N}"
+  [[ -f $STACKS_DIR/dashboard/compose.yml ]] && echo "  Dashboard  http://$host:10004   (every app and its health)"
   [[ -f $STACKS_DIR/portainer/compose.yml ]] && echo "  Portainer  https://$host:10000  (user: admin, password: ./homelab secret portainer)"
   [[ -f $STACKS_DIR/immich/compose.yml ]]    && echo "  Immich     http://$host:10002   (modulab@modulab / modulab)"
   [[ -f $STACKS_DIR/jellyfin/compose.yml ]]  && echo "  Jellyfin   http://$host:10001   (modulab / modulab)"
@@ -432,7 +445,7 @@ case ${1:-help} in
   apply)     shift; cmd_apply "$@" ;;
   autosync)  shift; cmd_autosync "$@" ;;
   secret)    shift; cmd_secret "$@" ;;
-  urls)      print_urls ;;
+  urls)      load_local_conf; print_urls ;;
   help|-h|--help) usage ;;
   *) usage >&2; exit 1 ;;
 esac

@@ -4,7 +4,8 @@
 
 A GitOps homelab on **rootless Podman**: [Portainer](https://www.portainer.io/),
 [Immich](https://immich.app/) and [Jellyfin](https://jellyfin.org/), all visible
-and controllable from **Podman Desktop**.
+and controllable from **Podman Desktop**, plus a [dashboard](#dashboard) that
+links to every app and shows its health.
 
 This repo is the source of truth. Clone it, run one command, and every stack in
 `stacks/` comes up. After that a systemd timer pulls new commits every 5 minutes
@@ -73,11 +74,12 @@ mounted at `/mnt/media` and bind-mounted at `/modulab`), not on the OS drive.
 | **10001** | Jellyfin  | http://&lt;host&gt;:10001     | `modulab` / `modulab`                                   |
 | **10002** | Immich    | http://&lt;host&gt;:10002     | `modulab@modulab` / `modulab` (Immich logs in by email) |
 | **10003** | FUTO Notes | http://&lt;host&gt;:10003    | sync password from `./homelab secret futo-notes` (random per machine) |
+| **10004** | Dashboard | http://&lt;host&gt;:10004     | none (read-only, LAN only)                              |
 
 **From the internet:** Immich (**https://immich.example.com**) and
 FUTO Notes (**https://futo-notes.example.com**) are also published
 through a Cloudflare Tunnel (see [Cloudflare Tunnel](#cloudflare-tunnel)).
-Jellyfin and Portainer are LAN-only.
+Jellyfin, Portainer and the dashboard are LAN-only.
 
 **FUTO Notes** is a sync server for the end-to-end encrypted
 [FUTO Notes](https://notes.futo.org) apps; the server only stores encrypted
@@ -87,7 +89,8 @@ rather than `modulab` because the server is on the internet.
 
 **Port scheme:** every web UI gets the next free port from **10000** upwards,
 mapped onto the app's own internal port (e.g. `10001:8096`). When you add a
-stack, give it the next number (10003, ...) and add a row here. Only the
+stack, give it the next number (10005, ...), add a row here and a tile to
+the [dashboard](#dashboard). Only the
 host side changes, so app docs that mention the internal port still apply
 inside the container. Jellyfin's LAN auto-discovery (7359/udp) is not
 published; enter the server address in the apps manually.
@@ -104,6 +107,35 @@ generated password.
 
 > These defaults are meant for a trusted home LAN. Change them before exposing
 > anything to the internet.
+
+## Dashboard
+
+**http://&lt;host&gt;:10004** is the start page: one tile per app (click it to
+open the app) with its health, plus the host's CPU, memory, temperature and
+free space on the OS drive and media SSD. It's [Homepage](https://gethomepage.dev/).
+
+Each tile shows:
+
+* a **status dot** for the container, read from the Podman socket: green when
+  running (and healthy, if the image has a healthcheck), red when stopped or
+  unhealthy. Click the dot to see the container's CPU, RAM and network.
+* an **HTTP check** with response time: Jellyfin `/health`, Immich
+  `/api/server/ping`, FUTO Notes `/health` and Portainer `/api/system/status`.
+  The *Cloudflare Tunnel* tile loads `https://immich.<domain>` from the
+  internet side, so it fails if the tunnel or DNS is broken even while the
+  container is running.
+* Immich's database, machine learning and cache containers get status-only
+  tiles under *Behind the scenes*.
+
+Tiles and widgets are in [`stacks/dashboard/config/`](stacks/dashboard/config/)
+(`services.yaml`, `widgets.yaml`, `settings.yaml`). The folder is mounted
+read-only and Homepage reloads it on change, so edits apply on the next sync
+without a restart. Links use this machine's LAN address, which the dashboard's
+`pre-up` hook detects on each deploy. If the address changes, run
+`./homelab up dashboard`. To pin an address or use a hostname, set
+`HOMELAB_HOST` in `.homelab.env`. Homepage only answers requests for that
+address, the hostname (and `<hostname>.local`) and localhost, which guards
+against DNS rebinding.
 
 **Podman Desktop:** everything runs on the default rootless Podman engine, so it
 shows up under *Containers*, grouped by compose project. Podman Desktop can also
@@ -194,6 +226,7 @@ stacks/
   immich/               Immich server, ML, Valkey, Postgres (+ upstream hwaccel files)
   jellyfin/             Jellyfin with Intel iGPU passthrough
   futo-notes/           FUTO Notes sync server (encrypted blobs + SQLite)
+  dashboard/            Homepage start page; config/ holds the tiles and widgets
   cloudflared/          Cloudflare Tunnel; config.template.yml maps public hostnames
 .homelab.env            machine-local settings (gitignored)
 stacks/*/.env           machine-local values and secrets (gitignored)

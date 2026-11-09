@@ -1,0 +1,32 @@
+# Dashboard — one page with every app and its health (Homepage).
+# https://gethomepage.dev/installation/docker/
+# Tiles and widgets live in config/ (tracked in git, mounted read-only), so
+# change them here and push; Homepage picks up edits without a restart.
+name: dashboard
+
+services:
+  dashboard:
+    container_name: dashboard
+    image: ghcr.io/gethomepage/homepage:latest
+    restart: always
+    # Host networking lets the health checks reach every app on its published
+    # localhost port (like cloudflared). Homepage listens on PORT directly.
+    network_mode: host
+    environment:
+      PORT: "10004" # web UI; also in pre-up's allowed hosts
+      # Written by the pre-up hook: the LAN address used in the tile links,
+      # the public domain, and the Host headers Homepage accepts.
+      HOMEPAGE_VAR_HOST: ${HOMEPAGE_VAR_HOST:?run ./homelab up dashboard (the pre-up hook sets it)}
+      HOMEPAGE_VAR_DOMAIN: ${HOMEPAGE_VAR_DOMAIN:-}
+      HOMEPAGE_ALLOWED_HOSTS: ${HOMEPAGE_ALLOWED_HOSTS:-}
+      # Logs go to `./homelab logs dashboard`; config/ is read-only.
+      LOG_TARGETS: stdout
+    volumes:
+      - ./config:/app/config:ro
+      - ../../assets/icon.svg:/app/public/images/modulab.svg:ro
+      # Rootless Podman API socket, for container status and CPU/RAM per tile.
+      - ${XDG_RUNTIME_DIR:-/run/user/1000}/podman/podman.sock:/var/run/docker.sock
+      # Only for the free-space widget of the media SSD.
+      - ${MEDIA_ROOT}:/mnt/media:ro
+    security_opt:
+      - label=disable

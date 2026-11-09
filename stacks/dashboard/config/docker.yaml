@@ -1,0 +1,4 @@
+# The rootless Podman API socket, mounted at /var/run/docker.sock (compose.yml).
+# Services name it with `server: podman` to show their container's status.
+podman:
+  socket: /var/run/docker.sock

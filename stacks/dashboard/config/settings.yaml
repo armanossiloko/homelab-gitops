@@ -1,0 +1,17 @@
+# https://gethomepage.dev/configs/settings/
+title: modulab
+favicon: /images/modulab.svg
+theme: dark
+color: slate
+headerStyle: clean
+statusStyle: dot
+hideVersion: true
+disableUpdateCheck: true
+
+layout:
+  Apps:
+    style: row
+    columns: 4
+  Behind the scenes:
+    style: row
+    columns: 4

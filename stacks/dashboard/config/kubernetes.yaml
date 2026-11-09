@@ -1,0 +1,2 @@
+# Not used. Homepage needs every one of its config files to exist, and
+# config/ is read-only, so it cannot create them itself.
