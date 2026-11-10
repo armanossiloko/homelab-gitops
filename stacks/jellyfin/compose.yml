@@ -13,9 +13,18 @@ services:
       # advertises the container's internal address, which clients can't reach.
     environment:
       TZ: ${TZ:-Etc/UTC}
+    healthcheck:
+      # The image checks every 30 s: a podman process spawn and CPU wake-up
+      # twice a minute, on a box that idles most of the day. The dashboard
+      # polls /health itself, so a slow container check loses nothing.
+      # Same test as the image's; Podman ignores an override without one.
+      test: ["CMD-SHELL", "curl --noproxy 'localhost' -Lk -fsS \"$${HEALTHCHECK_URL}\" || exit 1"]
+      interval: 5m
+      start_period: 10s
     devices:
-      # Intel iGPU for hardware transcoding (QSV / VA-API). Enable it in
-      # Dashboard → Playback → Transcoding. Remove this if there is no /dev/dri.
+      # Intel iGPU for hardware transcoding (QSV / VA-API). The post-up hook
+      # turns on Quick Sync; bootstrap installs a udev rule so rootless
+      # containers can open the render node. Remove this if there is no /dev/dri.
       - /dev/dri:/dev/dri
     volumes:
       - ${JELLYFIN_CONFIG}:/config
