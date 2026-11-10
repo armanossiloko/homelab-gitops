@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Installs and (re)starts the power agent behind the dashboard's Shut down and
+# Restart buttons: power/server.py as the systemd user service homelab-power.
+# It runs on the host, not in a container, because powering off goes through
+# logind. Restarted on every deploy so script and .env changes take effect.
+set -euo pipefail
+
+STACK_DIR=$(pwd)
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+UNIT="$UNIT_DIR/homelab-power.service"
+# Shells inside a desktop session can carry a private D-Bus; use the user bus.
+export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus"
+
+mkdir -p "$UNIT_DIR"
+unit=$(cat <<UNIT
+[Unit]
+Description=modulab dashboard power buttons (shut down / restart)
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 -I $STACK_DIR/power/server.py
+EnvironmentFile=$STACK_DIR/.env
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+UNIT
+)
+if [[ ! -f $UNIT || $(cat "$UNIT") != "$unit" ]]; then
+  printf '%s\n' "$unit" >"$UNIT"
+  systemctl --user daemon-reload
+fi
+systemctl --user enable -q homelab-power.service
+systemctl --user restart homelab-power.service
+
+# Ask logind from inside the user manager, where the agent runs: a desktop
+# session's own answer can differ.
+verdict=$(systemd-run --user --wait --pipe -q busctl call org.freedesktop.login1 \
+  /org/freedesktop/login1 org.freedesktop.login1.Manager CanPowerOff 2>/dev/null | cut -d'"' -f2) || true
+if [[ $verdict != yes ]]; then
+  echo "power buttons need a polkit rule (logind says '${verdict:-unknown}'); run ./bootstrap.sh once" >&2
+fi

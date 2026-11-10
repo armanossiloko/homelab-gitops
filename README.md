@@ -29,8 +29,11 @@ Bootstrap is idempotent (safe to re-run). It:
 3. If the ufw firewall is active, allows the homelab port range (`10000-10099`)
    from your local subnet only. Otherwise other devices on the network can't
    reach anything.
-4. Renders each stack's `.env` from `.env.example` (paths, timezone, random secrets).
-5. Deploys every stack and enables the `homelab-sync` timer.
+4. Installs a polkit rule that lets your user shut down and restart the machine
+   without a password prompt, for the dashboard's power buttons (sudo; see
+   [Shut down and Restart](#shut-down-and-restart)).
+5. Renders each stack's `.env` from `.env.example` (paths, timezone, random secrets).
+6. Deploys every stack and enables the `homelab-sync` timer.
 
 Shared settings live in [`homelab.conf`](homelab.conf). To override them on
 one machine, pass them to bootstrap. They are saved to the gitignored
@@ -74,7 +77,8 @@ mounted at `/mnt/media` and bind-mounted at `/modulab`), not on the OS drive.
 | **10001** | Jellyfin  | http://&lt;host&gt;:10001     | `modulab` / `modulab`                                   |
 | **10002** | Immich    | http://&lt;host&gt;:10002     | `modulab@modulab` / `modulab` (Immich logs in by email) |
 | **10003** | FUTO Notes | http://&lt;host&gt;:10003    | sync password from `./homelab secret futo-notes` (random per machine) |
-| **10004** | Dashboard | http://&lt;host&gt;:10004     | none (read-only, LAN only)                              |
+| **10004** | Dashboard | http://&lt;host&gt;:10004     | none (LAN only)                                         |
+| 10005     | Power agent | (no page)                | used by the dashboard's Shut down / Restart buttons     |
 
 **From the internet:** Immich (**https://immich.example.com**) and
 FUTO Notes (**https://futo-notes.example.com**) are also published
@@ -89,7 +93,7 @@ rather than `modulab` because the server is on the internet.
 
 **Port scheme:** every web UI gets the next free port from **10000** upwards,
 mapped onto the app's own internal port (e.g. `10001:8096`). When you add a
-stack, give it the next number (10005, ...), add a row here and a tile to
+stack, give it the next number (10006, ...), add a row here and a tile to
 the [dashboard](#dashboard). Only the
 host side changes, so app docs that mention the internal port still apply
 inside the container. Jellyfin's LAN auto-discovery (7359/udp) is not
@@ -136,6 +140,35 @@ without a restart. Links use this machine's LAN address, which the dashboard's
 `HOMELAB_HOST` in `.homelab.env`. Homepage only answers requests for that
 address, the hostname (and `<hostname>.local`) and localhost, which guards
 against DNS rebinding.
+
+### Shut down and Restart
+
+The **Shut down** and **Restart** buttons (bottom left) power off or reboot the
+whole machine after a confirmation. After a restart every stack comes back by
+itself and the page reloads once the dashboard is up again. After a shutdown,
+someone has to press the power button.
+
+Homepage has no buttons that run commands, so these are added by
+[`config/custom.js`](stacks/dashboard/config/custom.js) and call a small
+power agent, [`power/server.py`](stacks/dashboard/power/server.py). It runs
+on the host as the systemd user service `homelab-power` on port 10005, because
+shutting down goes through logind, outside any container. The dashboard's
+`post-up` hook installs it and restarts it on every deploy.
+
+* **Permission:** logind normally asks for a password before a background
+  service may power off. `bootstrap` installs a polkit rule,
+  `/etc/polkit-1/rules.d/50-homelab-power.rules` (sudo), that allows it for
+  your user only. Without it the buttons show an error telling you to run
+  `./bootstrap.sh`.
+* **Who can use it:** anyone who can open the dashboard, that is, anyone on
+  your LAN (the agent has no password, like the dashboard). Other websites
+  can't trigger it: the agent only accepts requests whose `Host` and `Origin`
+  are the dashboard's addresses, with a header that forces a browser
+  preflight. Shutdowns respect block inhibitors (e.g. a running package
+  upgrade).
+* Logs: `journalctl --user -u homelab-power`. To try it without powering
+  anything off, run the agent by hand with `POWER_DRY_RUN=1` and a spare
+  `POWER_PORT`.
 
 **Podman Desktop:** everything runs on the default rootless Podman engine, so it
 shows up under *Containers*, grouped by compose project. Podman Desktop can also
@@ -226,7 +259,8 @@ stacks/
   immich/               Immich server, ML, Valkey, Postgres (+ upstream hwaccel files)
   jellyfin/             Jellyfin with Intel iGPU passthrough
   futo-notes/           FUTO Notes sync server (encrypted blobs + SQLite)
-  dashboard/            Homepage start page; config/ holds the tiles and widgets
+  dashboard/            Homepage start page; config/ holds the tiles and widgets,
+                        power/ the agent behind the Shut down / Restart buttons
   cloudflared/          Cloudflare Tunnel; config.template.yml maps public hostnames
 .homelab.env            machine-local settings (gitignored)
 stacks/*/.env           machine-local values and secrets (gitignored)

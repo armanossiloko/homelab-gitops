@@ -349,6 +349,7 @@ cmd_bootstrap() {
   log "media directory: $HOMELAB_MEDIA"
   open_firewall
   enable_gpu_access
+  enable_power_control
   cmd_up || warn "some stacks did not start; fix them and run ./homelab up"
   if git -C "$ROOT" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
     cmd_autosync on
@@ -392,6 +393,35 @@ enable_gpu_access() {
     sudo udevadm control --reload &&
     sudo udevadm trigger --subsystem-match=drm --action=change ||
     warn "could not install $GPU_RULE; hardware transcoding may not work"
+}
+
+# The dashboard's Shut down / Restart buttons (stacks/dashboard/power) run as
+# this user without a login session, which logind only lets power off after a
+# password prompt. This polkit rule allows it for this user, without asking.
+POWER_RULE=/etc/polkit-1/rules.d/50-homelab-power.rules
+can_power_off() { # logind's answer as seen from the user manager, like the agent
+  systemd-run --user --wait --pipe -q busctl call org.freedesktop.login1 /org/freedesktop/login1 \
+    org.freedesktop.login1.Manager CanPowerOff 2>/dev/null | cut -d'"' -f2
+}
+enable_power_control() {
+  [[ -f $STACKS_DIR/dashboard/compose.yml ]] || return 0
+  [[ $(can_power_off) == yes ]] && return 0
+  log "power buttons: allowing $USER to shut down and restart without a password (sudo)"
+  sudo tee "$POWER_RULE" >/dev/null <<RULE || { warn "could not install $POWER_RULE; the dashboard's power buttons won't work"; return 0; }
+// Installed by modulab bootstrap: lets $USER shut down and restart the machine
+// without a password prompt (the dashboard's power buttons, stacks/dashboard/power).
+polkit.addRule(function (action, subject) {
+  var allowed = [
+    "org.freedesktop.login1.power-off",
+    "org.freedesktop.login1.power-off-multiple-sessions",
+    "org.freedesktop.login1.reboot",
+    "org.freedesktop.login1.reboot-multiple-sessions"
+  ];
+  if (subject.user == "$USER" && allowed.indexOf(action.id) >= 0) return polkit.Result.YES;
+});
+RULE
+  sleep 1 # polkit reloads rules.d on change
+  [[ $(can_power_off) == yes ]] || warn "polkit rule installed, but logind still refuses; see $POWER_RULE"
 }
 
 install_compose() {
