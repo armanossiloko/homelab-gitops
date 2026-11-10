@@ -348,6 +348,7 @@ cmd_bootstrap() {
   log "data directory:  $HOMELAB_DATA"
   log "media directory: $HOMELAB_MEDIA"
   open_firewall
+  enable_gpu_access
   cmd_up || warn "some stacks did not start; fix them and run ./homelab up"
   if git -C "$ROOT" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
     cmd_autosync on
@@ -372,6 +373,25 @@ open_firewall() {
   log "firewall: allowing tcp $HOMELAB_PORTS from $subnet (sudo)"
   sudo ufw allow from "$subnet" to any port "$HOMELAB_PORTS" proto tcp comment 'homelab web UIs (LAN only)' >/dev/null \
     || warn "could not update ufw; other devices may not reach the services"
+}
+
+# Rootless containers reach the iGPU render node as the host user. By default
+# only the "render" group and whoever is active on the physical seat (a logind
+# ACL) may open it, so hardware transcoding breaks whenever nobody is logged in
+# at the console. Render nodes give compute/video access only, not the display.
+GPU_RULE=/etc/udev/rules.d/70-homelab-gpu.rules
+enable_gpu_access() {
+  compgen -G '/dev/dri/renderD*' >/dev/null || return 0
+  grep -qs 'renderD' "$GPU_RULE" && return 0
+  log "iGPU: letting rootless containers use /dev/dri/renderD* (sudo)"
+  printf '%s\n' \
+    '# Installed by modulab bootstrap: lets rootless containers (Jellyfin, Immich)' \
+    '# use the iGPU for hardware transcoding regardless of who is logged in.' \
+    'SUBSYSTEM=="drm", KERNEL=="renderD*", MODE="0666"' |
+    sudo tee "$GPU_RULE" >/dev/null &&
+    sudo udevadm control --reload &&
+    sudo udevadm trigger --subsystem-match=drm --action=change ||
+    warn "could not install $GPU_RULE; hardware transcoding may not work"
 }
 
 install_compose() {

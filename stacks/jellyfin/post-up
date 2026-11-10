@@ -40,6 +40,24 @@ if [[ -z $TOKEN ]]; then
   exit 0
 fi
 
+# Hardware transcoding on the Intel iGPU (Quick Sync). Only applied while it is
+# still the default "none", so a choice made later in the UI is kept. The iGPU
+# (UHD 630) decodes H.264, HEVC (incl. 10-bit), MPEG-2, VC-1, VP8 and VP9.
+if [[ -e /dev/dri/renderD128 ]]; then
+  enc=$(api "$URL/System/Configuration/encoding")
+  if grep -q '"HardwareAccelerationType":"none"' <<<"$enc"; then
+    python3 -c '
+import sys, json
+c = json.load(sys.stdin)
+c.update(HardwareAccelerationType="qsv", VaapiDevice="/dev/dri/renderD128",
+         EnableHardwareEncoding=True, EnableVppTonemapping=True,
+         EnableDecodingColorDepth10Hevc=True, EnableDecodingColorDepth10Vp9=True,
+         HardwareDecodingCodecs=["h264", "hevc", "mpeg2video", "vc1", "vp8", "vp9"])
+print(json.dumps(c))' <<<"$enc" | api -X POST "$URL/System/Configuration/encoding" -d @-
+    echo "enabled Jellyfin hardware transcoding (Intel Quick Sync)"
+  fi
+fi
+
 existing=$(api "$URL/Library/VirtualFolders")
 for lib in "${LIBRARIES[@]}"; do
   IFS='|' read -r name type path <<<"$lib"
