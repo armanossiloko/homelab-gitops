@@ -14,7 +14,7 @@
     - Jellyfin:
         icon: jellyfin.svg
         href: http://{{HOMEPAGE_VAR_HOST}}:10001
-        description: Movies, shows and cartoons
+        description: Movies, shows, cartoons and wrestling
         server: podman
         container: jellyfin
         siteMonitor: http://localhost:10001/health
@@ -42,6 +42,12 @@
         server: podman
         container: portainer
         siteMonitor: https://localhost:10000/api/system/status
+
+    - Printing:
+        icon: mdi-printer
+        href: http://{{HOMEPAGE_VAR_HOST}}:631/printers/
+        description: Print from any device · Save as PDF and USB printers
+        siteMonitor: http://localhost:631/
 
 - Behind the scenes:
     - Cloudflare Tunnel:

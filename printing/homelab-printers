@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# homelab-printers: give every USB printer plugged into this machine a
+# permanent CUPS queue that is shared on the LAN, so phones and computers in
+# other rooms find it in their print dialogs.
+#
+# `./homelab printing` installs this file to /usr/local/sbin, where root runs
+# it through homelab-printers.service: at boot, and whenever a USB printer is
+# plugged in (udev rule /etc/udev/rules.d/70-homelab-printers.rules).
+# Idempotent: a printer that already has a queue keeps it and is only made
+# shared again. Queues stay when the printer is unplugged; jobs wait until it
+# is back.
+#
+# Two kinds of USB printer:
+#   * IPP-over-USB (most printers made since about 2015): ipp-usb exposes them
+#     as network printers on localhost:60000 and up. Their queue is driverless
+#     (IPP Everywhere): the printer itself reports its options.
+#   * Older ones: CUPS's usb backend with the best matching installed driver.
+#
+# Run it by hand with --dry-run to see what it would do.
+set -uo pipefail
+export LC_ALL=C
+
+DRY_RUN=0
+[[ ${1:-} == --dry-run ]] && DRY_RUN=1
+
+log() { echo "homelab-printers: $*"; }
+run() { if ((DRY_RUN)); then echo "would run: $*"; else "$@"; fi; }
+
+# Normalized make and model, for telling whether two names are one printer.
+norm() { tr -cd '[:alnum:]' <<<"$1" | tr '[:upper:]' '[:lower:]'; }
+
+# Queue name from the printer's make and model: letters, digits, - and _.
+queue_name() {
+  local n
+  n=$(sed -e 's/[^A-Za-z0-9_-]\+/_/g' -e 's/^_//' -e 's/_$//' <<<"$1")
+  echo "${n:0:100}"
+}
+
+# USB devices with a printer interface (class 07), plugged in right now.
+usb_printer_count() {
+  local f n=0 seen=" "
+  for f in /sys/bus/usb/devices/*:*/bInterfaceClass; do
+    [[ -e $f && $(<"$f") == 07 ]] || continue
+    f=${f%/*} f=${f##*/} f=${f%%:*}
+    [[ $seen == *" $f "* ]] || { seen+="$f "; n=$((n + 1)); }
+  done
+  echo $n
+}
+
+# IPP-over-USB printers served by ipp-usb: prints "uri<TAB>make and model".
+# ipp-usb gives each device a port from http-min-port up and keeps it.
+ipp_usb_printers() {
+  local min port uri model
+  min=$(sed -n 's/^[[:space:]]*http-min-port[[:space:]]*=[[:space:]]*\([0-9]*\).*/\1/p' /etc/ipp-usb/ipp-usb.conf 2>/dev/null)
+  min=${min:-60000}
+  for ((port = min; port < min + 16; port++)); do
+    (: </dev/tcp/127.0.0.1/$port) 2>/dev/null || continue
+    uri="ipp://localhost:$port/ipp/print"
+    model=$(ipptool -T 5 -tv "$uri" get-printer-attributes.test 2>/dev/null |
+      sed -n 's/^[[:space:]]*printer-make-and-model ([^)]*) = //p' | head -n1)
+    [[ -n $model ]] && printf '%s\t%s\n' "$uri" "$model"
+  done
+}
+
+# Printers on CUPS's usb backend: prints "uri<TAB>make and model<TAB>device id".
+usb_backend_printers() {
+  lpinfo --include-schemes usb -l -v 2>/dev/null | awk '
+    function flush() { if (uri ~ /^usb:\/\//) printf "%s\t%s\t%s\n", uri, mm, id; uri = mm = id = "" }
+    /^Device: uri = / { flush(); uri = $0; sub(/^Device: uri = /, "", uri); next }
+    /^[[:space:]]+make-and-model = / { mm = $0; sub(/^[^=]*= /, "", mm); next }
+    /^[[:space:]]+device-id = / { id = $0; sub(/^[^=]*= /, "", id); next }
+    END { flush() }'
+}
+
+# Best installed driver for a device id: one marked recommended, else the first.
+pick_driver() {
+  local list
+  list=$(lpinfo --device-id "$1" -m 2>/dev/null)
+  [[ -n $list ]] || return 1
+  { grep -i -m1 'recommended' <<<"$list" || head -n1 <<<"$list"; } | awk '{print $1}'
+}
+
+queue_for_uri() { lpstat -v 2>/dev/null | awk -v uri="$1" '$NF == uri { sub(/:$/, "", $3); print $3; exit }'; }
+queue_exists() { lpstat -p "$1" >/dev/null 2>&1; }
+
+# ensure_queue <uri> <make and model> <driver>: one shared queue per printer.
+ensure_queue() {
+  local uri=$1 info=$2 driver=$3 q
+  q=$(queue_for_uri "$uri")
+  if [[ -n $q ]]; then
+    log "$info: already set up as $q"
+    run lpadmin -p "$q" -o printer-is-shared=true
+    return
+  fi
+  q=$(queue_name "$info")
+  if queue_exists "$q"; then
+    # Same printer on a new address (e.g. it moved to another ipp-usb port).
+    log "$info: moving queue $q to $uri"
+    run lpadmin -p "$q" -v "$uri" -o printer-is-shared=true
+    run cupsenable "$q"
+    return
+  fi
+  log "$info: adding queue $q ($uri, driver $driver)"
+  run lpadmin -p "$q" -E -v "$uri" -m "$driver" -D "$info" -L "$(hostname)" \
+    -o printer-is-shared=true -o printer-error-policy=retry-job || return 1
+  # The first real printer becomes the default (instead of nothing or the PDF one).
+  local default
+  default=$(lpstat -d 2>/dev/null | sed -n 's/^system default destination: //p')
+  if [[ -z $default || $default == PDF ]]; then run lpadmin -d "$q"; fi
+}
+
+main() {
+  ((EUID == 0 || DRY_RUN)) || { echo "run as root (or with --dry-run)" >&2; exit 1; }
+  local want found=() ipp=() usb=() tries line uri model id driver
+  want=$(usb_printer_count)
+  ((want > 0)) || { log "no USB printer plugged in"; exit 0; }
+
+  # Right after plug-in ipp-usb and the usb backend need a few seconds.
+  for ((tries = 0; tries < 12; tries++)); do
+    mapfile -t ipp < <(ipp_usb_printers)
+    mapfile -t usb < <(usb_backend_printers)
+    ((${#ipp[@]} + ${#usb[@]} >= want)) && break
+    sleep 5
+  done
+
+  for line in "${ipp[@]}"; do
+    IFS=$'\t' read -r uri model <<<"$line"
+    found+=("$(norm "$model")")
+    ensure_queue "$uri" "$model" everywhere || log "$model: could not add queue"
+  done
+
+  local f dup
+  for line in "${usb[@]}"; do
+    IFS=$'\t' read -r uri model id <<<"$line"
+    # An IPP-over-USB printer can show up here too; driverless is better.
+    dup=0
+    for f in "${found[@]}"; do
+      [[ $f == *"$(norm "$model")"* || $(norm "$model") == *"$f"* ]] && dup=1
+    done
+    ((dup)) && continue
+    if ! driver=$(pick_driver "$id"); then
+      log "$model: no installed driver matches (device id: $id); add it in the CUPS web UI"
+      continue
+    fi
+    ensure_queue "$uri" "$model" "$driver" || log "$model: could not add queue"
+  done
+
+  ((${#ipp[@]} + ${#usb[@]} > 0)) || log "$want USB printer(s) plugged in, but CUPS sees none yet"
+}
+
+main

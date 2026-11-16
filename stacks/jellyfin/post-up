@@ -9,6 +9,7 @@ LIBRARIES=(
   "Movies|movies|/media/movies"
   "Shows|tvshows|/media/shows"
   "Cartoons|tvshows|/media/cartoons"
+  "Wrestling|movies|/media/wrestling"
 )
 
 URL=http://localhost:10001
