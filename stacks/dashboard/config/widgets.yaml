@@ -1,25 +1,5 @@
-# Top bar: host health. https://gethomepage.dev/widgets/info/resources/
-# `/` is the OS drive; /mnt/media is HOMELAB_MEDIA (the media SSD), mounted
-# read-only in compose.yml just so its free space can be shown.
-- resources:
-    label: System
-    cpu: true
-    memory: true
-    uptime: true
-    cputemp: true
-    units: metric
-
-- resources:
-    label: OS drive
-    disk: /
-
-- resources:
-    label: Media SSD
-    disk: /mnt/media
-
-- datetime:
-    text_size: md
-    format:
-      dateStyle: long
-      timeStyle: short
-      hourCycle: h23
+# Homepage's info widgets. https://gethomepage.dev/widgets/info/
+# None: the header (name, clock, power menu and CPU / memory / temperature /
+# drive cards) is drawn by custom.js from Homepage's resources API, which reads
+# the OS drive at / and the media SSD at /mnt/media (mounted read-only in
+# compose.yml just for its free space). Homepage needs the file to exist.

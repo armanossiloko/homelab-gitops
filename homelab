@@ -350,6 +350,7 @@ cmd_bootstrap() {
   open_firewall
   enable_gpu_access
   enable_power_control
+  enable_printing
   cmd_up || warn "some stacks did not start; fix them and run ./homelab up"
   if git -C "$ROOT" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
     cmd_autosync on
@@ -359,17 +360,24 @@ cmd_bootstrap() {
   echo
   cmd_status
   print_urls
+  print_printers
 }
 
 # If ufw is active it drops incoming traffic by default, which hides every
 # service from other devices. Allow the homelab port range from the local
 # subnet only (needs sudo; ufw skips rules that already exist).
-open_firewall() {
-  have ufw && systemctl is-active -q ufw 2>/dev/null || return 0
-  grep -q '^ENABLED=yes' /etc/ufw/ufw.conf 2>/dev/null || return 0
-  local dev subnet
+ufw_active() {
+  have ufw && systemctl is-active -q ufw 2>/dev/null && grep -q '^ENABLED=yes' /etc/ufw/ufw.conf 2>/dev/null
+}
+lan_subnet() { # e.g. 192.168.0.0/24: the network of the default route's interface
+  local dev
   dev=$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}')
-  subnet=$(ip -4 route show dev "$dev" scope link proto kernel 2>/dev/null | awk '{print $1; exit}')
+  [[ -n $dev ]] || return 0
+  ip -4 route show dev "$dev" scope link proto kernel 2>/dev/null | awk '{print $1; exit}'
+}
+open_firewall() {
+  ufw_active || return 0
+  local subnet; subnet=$(lan_subnet)
   if [[ -z $subnet ]]; then warn "could not detect the LAN subnet; open ports $HOMELAB_PORTS in ufw yourself"; return 0; fi
   log "firewall: allowing tcp $HOMELAB_PORTS from $subnet (sudo)"
   sudo ufw allow from "$subnet" to any port "$HOMELAB_PORTS" proto tcp comment 'homelab web UIs (LAN only)' >/dev/null \
@@ -424,6 +432,123 @@ RULE
   [[ $(can_power_off) == yes ]] || warn "polkit rule installed, but logind still refuses; see $POWER_RULE"
 }
 
+# Network printing (README → Printing). CUPS on the host shares its printers
+# with the LAN, so they show up in every device's print dialog: a virtual
+# "Save as PDF" printer, plus every USB printer that gets plugged in (set up by
+# printing/homelab-printers, installed to /usr/local/sbin and run by root at
+# boot and on plug-in). Host level, not a stack: printers need USB access and
+# system settings that rootless containers can't reach. Steps that are already
+# done are skipped; the rest need sudo, except adding printers (lpadmin group).
+PRINT_HELPER=/usr/local/sbin/homelab-printers
+PRINT_UNIT=/etc/systemd/system/homelab-printers.service
+PRINT_RULE=/etc/udev/rules.d/70-homelab-printers.rules
+PDF_CONF=/etc/cups/cups-pdf.conf
+PDF_DIR=$HOME/PDF # where "Save as PDF" jobs land (cups-pdf may only write under /home)
+
+enable_printing() {
+  if ! have lpadmin || [[ ! -e /usr/lib/cups/backend/cups-pdf ]] || ! have ipp-usb; then
+    have apt-get || { warn "printing: install CUPS, cups-pdf and ipp-usb, then run ./homelab printing"; return 0; }
+    log "printing: installing CUPS, ipp-usb and the PDF printer (sudo)"
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cups cups-filters ipp-usb avahi-daemon printer-driver-cups-pdf >/dev/null \
+      || { warn "printing: package install failed"; return 0; }
+  fi
+  if ! groups | grep -qw lpadmin; then
+    sudo usermod -aG lpadmin "$USER" && warn "printing: added $USER to lpadmin; log in again, then run ./homelab printing"
+    return 0
+  fi
+
+  # Share printers with the LAN: cupsd listens on port 631 on every interface
+  # and accepts jobs from local subnets (@LOCAL) only. Admin stays local.
+  if ! cupsctl | grep -qx '_share_printers=1'; then
+    log "printing: sharing printers on the LAN (sudo)"
+    sudo cupsctl --share-printers --no-remote-admin --no-remote-any || { warn "printing: cupsctl failed"; return 0; }
+  fi
+  if ufw_active; then
+    local subnet; subnet=$(lan_subnet)
+    if [[ -z $subnet ]]; then warn "printing: could not detect the LAN subnet; allow tcp 631 in ufw yourself"
+    elif ! sudo ufw status 2>/dev/null | grep -qE "^631/tcp +ALLOW +$subnet"; then
+      log "printing: firewall: allowing tcp 631 from $subnet (sudo)"
+      sudo ufw allow from "$subnet" to any port 631 proto tcp comment 'homelab printing (LAN only)' >/dev/null \
+        || warn "printing: could not update ufw; other devices won't reach the printers"
+    fi
+  fi
+
+  # Virtual PDF printer. Remote jobs come from users this machine doesn't know
+  # (cups-pdf calls them anonymous), so they are written as you, into $PDF_DIR.
+  mkdir -p "$PDF_DIR"
+  local pdf_settings
+  pdf_settings=$(printf '%s\n' '# --- modulab (./homelab printing) ---' \
+    "Out $PDF_DIR" "AnonDirName $PDF_DIR" "AnonUser $USER" 'AnonUMask 0022')
+  if [[ ! -r $PDF_CONF ]]; then warn "printing: $PDF_CONF missing or unreadable"
+  elif [[ $(sed -n '/^# --- modulab/,$p' "$PDF_CONF") != "$pdf_settings" ]]; then
+    log "printing: PDF printer saves to $PDF_DIR (sudo)"
+    { sed '/^# --- modulab/,$d' "$PDF_CONF"; echo "$pdf_settings"; } | sudo tee "$PDF_CONF.new" >/dev/null &&
+      sudo mv "$PDF_CONF.new" "$PDF_CONF" || warn "printing: could not update $PDF_CONF"
+  fi
+  if ! lpstat -p PDF >/dev/null 2>&1; then
+    local ppd; ppd=$(lpinfo -m 2>/dev/null | awk 'tolower($0) ~ /cups-pdf/ {print $1; exit}')
+    lpadmin -p PDF -E -v cups-pdf:/ -m "${ppd:-lsb/usr/cups-pdf/CUPS-PDF_opt.ppd}" || warn "printing: could not add the PDF printer"
+  fi
+  # Shown to other devices as "Save as PDF @ <hostname>".
+  lpadmin -p PDF -D 'Save as PDF' -L "$(hostname)" -o printer-is-shared=true 2>/dev/null || true
+
+  # USB printers: a boot-time service, and a udev rule that starts it on plug-in.
+  if ! cmp -s "$ROOT/printing/homelab-printers" "$PRINT_HELPER"; then
+    log "printing: installing $PRINT_HELPER (sudo)"
+    sudo install -m 755 "$ROOT/printing/homelab-printers" "$PRINT_HELPER" || { warn "printing: could not install $PRINT_HELPER"; return 0; }
+  fi
+  local unit rule
+  unit=$(cat <<'EOF'
+# Installed by modulab (./homelab printing): sets up and shares USB printers.
+[Unit]
+Description=Share USB printers on the LAN (modulab)
+After=cups.service ipp-usb.service
+Wants=cups.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homelab-printers
+
+[Install]
+WantedBy=multi-user.target
+EOF
+)
+  rule=$(printf '%s\n' '# Installed by modulab (./homelab printing): set up USB printers when plugged in.' \
+    'ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ENV{ID_USB_INTERFACES}=="*:07????:*", TAG+="systemd", ENV{SYSTEMD_WANTS}+="homelab-printers.service"')
+  if [[ $(cat "$PRINT_UNIT" 2>/dev/null) != "$unit" || $(cat "$PRINT_RULE" 2>/dev/null) != "$rule" ]]; then
+    log "printing: installing the USB printer service and udev rule (sudo)"
+    { echo "$unit" | sudo tee "$PRINT_UNIT" >/dev/null &&
+      echo "$rule" | sudo tee "$PRINT_RULE" >/dev/null &&
+      sudo systemctl daemon-reload && sudo systemctl enable homelab-printers.service >/dev/null 2>&1 &&
+      sudo udevadm control --reload; } || { warn "printing: could not install the USB printer service"; return 0; }
+  fi
+  # Pick up printers that are already plugged in.
+  if [[ -n $(find /sys/bus/usb/devices/ -maxdepth 2 -name bInterfaceClass -exec grep -lx 07 {} + 2>/dev/null) ]]; then
+    sudo systemctl start homelab-printers.service || warn "printing: see journalctl -u homelab-printers"
+  fi
+}
+
+# Queues on this machine (lpstat -e would also list ones seen on the network).
+local_queues() { LC_ALL=C lpstat -v 2>/dev/null | awk '$1 == "device" { sub(/:$/, "", $3); print $3 }'; }
+
+print_printers() {
+  have lpstat || return 0
+  local host q; host=$(lan_host)
+  echo
+  echo "${B}Printers${N} (shared on the LAN; queue page http://$host:631/printers/)"
+  while read -r q; do
+    [[ -n $q ]] && printf '  %-28s %s\n' "$q" "$(lpstat -l -p "$q" 2>/dev/null | sed -n 's/^[[:space:]]*Description: //p')"
+  done < <(local_queues)
+  [[ -n $(local_queues) ]] || echo "  none (run ./homelab printing)"
+}
+
+cmd_printing() {
+  load_local_conf
+  enable_printing
+  print_printers
+  echo "  Save as PDF writes to $PDF_DIR. USB printers are added when plugged in (journalctl -u homelab-printers)."
+}
+
 install_compose() {
   local arch url dest="$HOME/.local/bin/docker-compose"
   case $(uname -m) in x86_64) arch=x86_64 ;; aarch64|arm64) arch=aarch64 ;; *) die "unsupported arch $(uname -m)" ;; esac
@@ -476,6 +601,7 @@ Usage: ./homelab <command> [stack...]
   sync              pull from git and apply changed stacks (what the timer runs)
   autosync on|off   install/remove the systemd sync timer
   secret <stack>    print a generated password (portainer, futo-notes)
+  printing          set up network printing (sudo) and list the printers
   urls              print service URLs
 
 Stacks: $(all_stacks | tr '\n' ' ')
@@ -495,6 +621,7 @@ case ${1:-help} in
   apply)     shift; cmd_apply "$@" ;;
   autosync)  shift; cmd_autosync "$@" ;;
   secret)    shift; cmd_secret "$@" ;;
+  printing)  shift; cmd_printing ;;
   urls)      load_local_conf; print_urls ;;
   help|-h|--help) usage ;;
   *) usage >&2; exit 1 ;;

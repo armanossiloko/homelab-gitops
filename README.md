@@ -54,12 +54,15 @@ mounted at `/mnt/media` and bind-mounted at `/modulab`), not on the OS drive.
 | `/modulab/media/movies`         | `/media/movies`      | Jellyfin library *Movies*  |
 | `/modulab/media/shows`          | `/media/shows`       | Jellyfin library *Shows*   |
 | `/modulab/media/cartoons`       | `/media/cartoons`    | Jellyfin library *Cartoons* |
+| `/modulab/media/wrestling`      | `/media/wrestling`   | Jellyfin library *Wrestling* |
 | `/modulab/media/images`         | `/data`              | Immich (all photos & videos) |
 
 * **Jellyfin:** copy files into the folders and Jellyfin picks them up (or use
   Dashboard → Libraries → Scan). Naming that matches well: `movies/Title (Year)/Title (Year).mkv`
   and `shows/Show Name/Season 01/Show Name S01E01.mkv`. Cartoons is a TV-show
-  library, so use the same layout as `shows`. Jellyfin mounts media read-only.
+  library, so use the same layout as `shows`. Wrestling is a movies library (TMDb
+  lists each event as a movie): `wrestling/WrestleMania XX (2004) [imdbid-tt0403687]/WrestleMania XX (2004).mp4`,
+  where the IMDb ID pins the match. Jellyfin mounts media read-only.
 * **Immich:** upload from the web UI or the Immich phone app (server URL
   `http://<host>:10002`). Immich manages the `images` folder itself: it holds
   originals (`upload/` or `library/`), thumbnails, transcodes and nightly DB
@@ -79,6 +82,7 @@ mounted at `/mnt/media` and bind-mounted at `/modulab`), not on the OS drive.
 | **10003** | FUTO Notes | http://&lt;host&gt;:10003    | sync password from `./homelab secret futo-notes` (random per machine) |
 | **10004** | Dashboard | http://&lt;host&gt;:10004     | none (LAN only)                                         |
 | 10005     | Power agent | (no page)                | used by the dashboard's Shut down / Restart buttons     |
+| 631       | Printing  | http://&lt;host&gt;:631/printers/ | none; see [Printing](#printing)                  |
 
 **From the internet:** Immich (**https://immich.ossiloko.win**) and
 FUTO Notes (**https://futo-notes.ossiloko.win**) are also published
@@ -100,8 +104,8 @@ inside the container. Jellyfin's LAN auto-discovery (7359/udp) is not
 published; enter the server address in the apps manually.
 
 Accounts are created automatically on first start by each stack's `post-up`
-hook, so there are no setup wizards. Jellyfin also gets the *Movies*, *Shows*
-and *Cartoons* libraries (see [Media storage](#media-storage)). Add accounts
+hook, so there are no setup wizards. Jellyfin also gets the *Movies*, *Shows*,
+*Cartoons* and *Wrestling* libraries (see [Media storage](#media-storage)). Add accounts
 for family members in each app: Jellyfin → Dashboard → Users, Immich →
 Administration → Users. Change the defaults in
 `stacks/<stack>/.env.example` (for new machines) or `stacks/<stack>/.env` (for
@@ -131,8 +135,11 @@ Each tile shows:
 * Immich's database, machine learning and cache containers get status-only
   tiles under *Behind the scenes*.
 
-Tiles and widgets are in [`stacks/dashboard/config/`](stacks/dashboard/config/)
-(`services.yaml`, `widgets.yaml`, `settings.yaml`). The folder is mounted
+Tiles are in [`stacks/dashboard/config/`](stacks/dashboard/config/)
+(`services.yaml`, `settings.yaml`). The header above them (uptime, local and UTC
+clock, power buttons, and CPU / memory / temperature / drive cards) is drawn by
+`custom.js` and `custom.css` from Homepage's resources API, in place of
+Homepage's own info widgets (`widgets.yaml` is left empty). The folder is mounted
 read-only and Homepage reloads it on change, so edits apply on the next sync
 without a restart. Links use this machine's LAN address, which the dashboard's
 `pre-up` hook detects on each deploy. If the address changes, run
@@ -143,8 +150,8 @@ against DNS rebinding.
 
 ### Shut down and Restart
 
-The **Shut down** and **Restart** buttons (bottom left) power off or reboot the
-whole machine after a confirmation. After a restart every stack comes back by
+The **Restart** (amber) and **Shut down** (red) buttons at the top right of the
+dashboard reboot or power off the whole machine after a confirmation. After a restart every stack comes back by
 itself and the page reloads once the dashboard is up again. After a shutdown,
 someone has to press the power button.
 
@@ -177,6 +184,61 @@ see a Docker daemon if one is running, but none of these stacks use it.
 **Portainer:** open the `local` environment. It manages the same Podman engine.
 Portainer lists these stacks as created outside Portainer, which is expected:
 git, not the Portainer editor, is the place to change them.
+
+## Printing
+
+Any device on the LAN can print through this machine: pick it in the normal
+print dialog (Ctrl+P in a PDF viewer, Word, a browser, or Share → Print on a
+phone). The dialog shows the printer's own options, such as two-sided, colour
+or black and white, paper size, copies and page range. Nothing needs to be
+installed on the device. Windows, macOS, iOS, Android and Linux all find the
+printers by themselves, because they are announced on the network as
+driverless printers (IPP Everywhere, AirPrint and Mopria).
+
+| Printer | Shows up as | What it does |
+| ------- | ----------- | ------------ |
+| `PDF` | **Save as PDF @ modulab-800-01** | Saves the job as a PDF in `~/PDF` on this machine. Handy for checking that printing from a device works. |
+| USB printers | **&lt;make and model&gt; @ modulab-800-01** | Set up automatically when plugged in. The first one becomes the default. |
+
+**Plugging in a printer:** a udev rule starts `homelab-printers.service`,
+which runs [`printing/homelab-printers`](printing/homelab-printers) as root. It
+adds a permanent, shared CUPS queue for every USB printer:
+
+* **IPP-over-USB printers** (most printers made since about 2015) get a
+  driverless queue through `ipp-usb`. The printer itself reports its options.
+* **Older printers** get the best matching installed driver (HP, Brother,
+  Samsung, Gutenprint and others ship with Ubuntu). If none matches, the
+  journal says so; add the driver, then run `./homelab printing` again.
+
+Queues stay when the printer is unplugged. Jobs wait until it's back. Check
+what happened with `journalctl -u homelab-printers`, or try it with
+`sudo homelab-printers --dry-run`.
+
+**If a device doesn't list the printer:** add it by address,
+`http://<host>:631/printers/<queue>` (on Windows: *Add a printer → The
+printer that I want isn't listed → Select a shared printer by name*). Queue
+names are listed by `./homelab printing` and on `http://<host>:631/printers/`.
+
+**Setup:** `bootstrap` calls `./homelab printing`, which you can re-run any
+time (idempotent, asks for sudo). It runs CUPS on the host, not in a
+container, because printers need USB access and system settings that rootless
+Podman can't reach. It:
+
+1. Installs CUPS, `ipp-usb` and `cups-pdf` if missing.
+2. Turns on printer sharing (`cupsctl --share-printers`). CUPS then listens on
+   port 631 and accepts jobs from local subnets only. Changing settings stays
+   local to this machine.
+3. If ufw is active, allows tcp 631 from the LAN subnet. Discovery uses mDNS,
+   which Ubuntu's ufw already allows.
+4. Points `cups-pdf` at `~/PDF` (`/etc/cups/cups-pdf.conf`, block marked
+   `modulab`). Jobs from devices come from users this machine doesn't know,
+   so they're saved as your user.
+5. Installs `/usr/local/sbin/homelab-printers`, its service and the udev rule
+   `/etc/udev/rules.d/70-homelab-printers.rules`.
+
+GitOps sync doesn't touch the host, so after `printing/homelab-printers`
+changes in git, run `./homelab printing` to install the new version. The
+printers are reachable on the LAN only, not through the Cloudflare tunnel.
 
 ## How GitOps works here
 
@@ -242,6 +304,7 @@ Podman 5 fixes this.
 ./homelab compose immich ps   # any compose command, aimed at Podman
 ./homelab sync                # sync now instead of waiting for the timer
 ./homelab autosync off        # pause GitOps on this machine
+./homelab printing            # set up network printing (sudo) and list printers
 ```
 
 `./homelab` always points compose at the rootless Podman socket
@@ -262,6 +325,8 @@ stacks/
   dashboard/            Homepage start page; config/ holds the tiles and widgets,
                         power/ the agent behind the Shut down / Restart buttons
   cloudflared/          Cloudflare Tunnel; config.template.yml maps public hostnames
+printing/
+  homelab-printers      sets up and shares USB printers (installed to /usr/local/sbin)
 .homelab.env            machine-local settings (gitignored)
 stacks/*/.env           machine-local values and secrets (gitignored)
 ```
@@ -363,7 +428,7 @@ If a machine has no `/dev/dri`, remove the `devices:` entry in
 
 Two places hold everything worth keeping:
 
-* **`/modulab/media`** (SSD): your movies, shows and cartoons, plus `images/`,
+* **`/modulab/media`** (SSD): your movies, shows, cartoons and wrestling, plus `images/`,
   which holds every Immich photo and video and Immich's nightly database
   dumps in `images/backups/`.
 * **`~/homelab-data`**: `immich/postgres` (Immich's live database) and

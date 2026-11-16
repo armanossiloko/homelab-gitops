@@ -34,3 +34,4 @@ services:
       - ${MEDIA_MOVIES}:/media/movies:ro
       - ${MEDIA_SHOWS}:/media/shows:ro
       - ${MEDIA_CARTOONS}:/media/cartoons:ro
+      - ${MEDIA_WRESTLING}:/media/wrestling:ro
