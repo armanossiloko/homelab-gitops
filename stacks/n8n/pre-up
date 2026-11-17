@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Writes N8N_URL (http://<LAN address>:10006/) into .env on every run, for the
+# webhook URLs n8n shows. If the LAN address changes, run `./homelab up n8n`.
+set -euo pipefail
+
+PORT=10006 # keep in sync with compose.yml
+[[ -n ${HOMELAB_HOST:-} ]] || { echo "could not detect this machine's LAN address; set HOMELAB_HOST in .homelab.env" >&2; exit 1; }
+
+url="http://$HOMELAB_HOST:$PORT/"
+if grep -q '^N8N_URL=' .env 2>/dev/null; then
+  sed -i "s|^N8N_URL=.*|N8N_URL=$url|" .env
+else
+  printf 'N8N_URL=%s\n' "$url" >>.env
+fi

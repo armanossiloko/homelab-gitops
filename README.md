@@ -3,7 +3,8 @@
 # modulab
 
 A GitOps homelab on **rootless Podman**: [Portainer](https://www.portainer.io/),
-[Immich](https://immich.app/) and [Jellyfin](https://jellyfin.org/), all visible
+[Immich](https://immich.app/), [Jellyfin](https://jellyfin.org/) and
+[n8n](https://n8n.io/), all visible
 and controllable from **Podman Desktop**, plus a [dashboard](#dashboard) that
 links to every app and shows its health.
 
@@ -82,12 +83,13 @@ mounted at `/mnt/media` and bind-mounted at `/modulab`), not on the OS drive.
 | **10003** | FUTO Notes | http://&lt;host&gt;:10003    | sync password from `./homelab secret futo-notes` (random per machine) |
 | **10004** | Dashboard | http://&lt;host&gt;:10004     | none (LAN only)                                         |
 | 10005     | Power agent | (no page)                | used by the dashboard's Shut down / Restart buttons     |
+| **10006** | n8n       | http://&lt;host&gt;:10006     | `modulab@modulab.lan` / `Modulab1` (see [n8n](#n8n)) |
 | 631       | Printing  | http://&lt;host&gt;:631/printers/ | none; see [Printing](#printing)                  |
 
 **From the internet:** Immich (**https://immich.example.com**) and
 FUTO Notes (**https://futo-notes.example.com**) are also published
 through a Cloudflare Tunnel (see [Cloudflare Tunnel](#cloudflare-tunnel)).
-Jellyfin, Portainer and the dashboard are LAN-only.
+Jellyfin, n8n, Portainer and the dashboard are LAN-only.
 
 **FUTO Notes** is a sync server for the end-to-end encrypted
 [FUTO Notes](https://notes.futo.org) apps; the server only stores encrypted
@@ -97,7 +99,7 @@ rather than `modulab` because the server is on the internet.
 
 **Port scheme:** every web UI gets the next free port from **10000** upwards,
 mapped onto the app's own internal port (e.g. `10001:8096`). When you add a
-stack, give it the next number (10006, ...), add a row here and a tile to
+stack, give it the next number (10007, ...), add a row here and a tile to
 the [dashboard](#dashboard). Only the
 host side changes, so app docs that mention the internal port still apply
 inside the container. Jellyfin's LAN auto-discovery (7359/udp) is not
@@ -128,12 +130,13 @@ Each tile shows:
   running (and healthy, if the image has a healthcheck), red when stopped or
   unhealthy. Click the dot to see the container's CPU, RAM and network.
 * an **HTTP check** with response time: Jellyfin `/health`, Immich
-  `/api/server/ping`, FUTO Notes `/health` and Portainer `/api/system/status`.
+  `/api/server/ping`, FUTO Notes `/health`, n8n `/healthz/readiness` and
+  Portainer `/api/system/status`.
   The *Cloudflare Tunnel* tile loads `https://immich.<domain>` from the
   internet side, so it fails if the tunnel or DNS is broken even while the
   container is running.
-* Immich's database, machine learning and cache containers get status-only
-  tiles under *Behind the scenes*.
+* Immich's database, machine learning and cache containers, and n8n's task
+  runners, get status-only tiles under *Behind the scenes*.
 
 Tiles are in [`stacks/dashboard/config/`](stacks/dashboard/config/)
 (`services.yaml`, `settings.yaml`). The header above them (uptime, local and UTC
@@ -184,6 +187,34 @@ see a Docker daemon if one is running, but none of these stacks use it.
 **Portainer:** open the `local` environment. It manages the same Podman engine.
 Portainer lists these stacks as created outside Portainer, which is expected:
 git, not the Portainer editor, is the place to change them.
+
+## n8n
+
+**http://&lt;host&gt;:10006** is [n8n](https://docs.n8n.io/), for automations:
+workflows that run on a schedule, on a webhook or by hand and connect apps and
+APIs. Log in with `modulab@modulab.lan` / `Modulab1`. The `post-up` hook creates
+this owner account on first start, because until an owner exists anyone who
+opens n8n could claim it. n8n requires an email with a dot in the domain and a
+password with an uppercase letter and a number, so the default differs from the
+other apps. Change it under *Settings → Personal*.
+
+* **LAN only:** not published through the Cloudflare tunnel. Webhooks are
+  reachable only from the LAN, at `http://<host>:10006/webhook/<path>`. The
+  `pre-up` hook sets n8n's `WEBHOOK_URL` to this machine's LAN address on each
+  deploy, so the URLs shown in the editor work from other devices. If the
+  address changes, run `./homelab up n8n`. Services that call webhooks from the
+  internet (GitHub, Stripe, Telegram bots...) can't reach it, and OAuth sign-in
+  for providers that insist on https redirect URLs (e.g. Google) won't work;
+  use API keys or app passwords for those credentials instead.
+* **Code nodes** run in a second container, `n8n-runners`, with JavaScript and
+  Python. Python has no imports by default (the sandbox rejects them).
+* **Images** come from GHCR (`ghcr.io/n8n-io/...`), the same builds as Docker
+  Hub without its anonymous pull limit. `n8n` and `n8n-runners` must be the same
+  version; `./homelab update n8n` pulls both.
+* **Data:** `~/homelab-data/n8n` holds the SQLite database and `config`, the
+  encryption key for saved credentials. Keep the two together: without the key
+  the credentials can't be decrypted. The files are owned by your user
+  (`userns_mode: keep-id`).
 
 ## Printing
 
@@ -322,6 +353,7 @@ stacks/
   immich/               Immich server, ML, Valkey, Postgres (+ upstream hwaccel files)
   jellyfin/             Jellyfin with Intel iGPU passthrough
   futo-notes/           FUTO Notes sync server (encrypted blobs + SQLite)
+  n8n/                  n8n workflow automation + its Code-node task runners
   dashboard/            Homepage start page; config/ holds the tiles and widgets,
                         power/ the agent behind the Shut down / Restart buttons
   cloudflared/          Cloudflare Tunnel; config.template.yml maps public hostnames
@@ -431,8 +463,9 @@ Two places hold everything worth keeping:
 * **`/modulab/media`** (SSD): your movies, shows, cartoons and wrestling, plus `images/`,
   which holds every Immich photo and video and Immich's nightly database
   dumps in `images/backups/`.
-* **`~/homelab-data`**: `immich/postgres` (Immich's live database) and
-  `jellyfin/config` (users, watch history, metadata).
+* **`~/homelab-data`**: `immich/postgres` (Immich's live database),
+  `jellyfin/config` (users, watch history, metadata) and `n8n` (workflows,
+  credentials and their encryption key).
 
 Both drives are in the same machine, so copy both folders to another disk or
 location. Files created by containers that run as a non-root user (for example
