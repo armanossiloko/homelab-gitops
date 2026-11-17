@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Creates the n8n owner account on a fresh install, so there is no setup page.
+# Until an owner exists, anyone who opens n8n could claim it, so this runs on
+# the first start. Does nothing once an owner exists.
+set -euo pipefail
+
+URL=http://localhost:10006
+# /healthz answers while database migrations still run (minutes on first
+# start or after an upgrade); readiness waits for them.
+for _ in $(seq 150); do
+  curl -fsS --max-time 5 -o /dev/null "$URL/healthz/readiness" 2>/dev/null && break
+  sleep 2
+done
+
+settings=$(curl -fsS --max-time 10 "$URL/rest/settings") || { echo "n8n is not ready; re-run ./homelab up n8n" >&2; exit 1; }
+grep -q '"showSetupOnFirstLoad":true' <<<"$settings" || exit 0
+
+curl -fsS --max-time 30 -o /dev/null -X POST "$URL/rest/owner/setup" -H 'Content-Type: application/json' \
+  -d "$(printf '{"email":"%s","firstName":"modulab","lastName":"homelab","password":"%s"}' \
+    "$N8N_OWNER_EMAIL" "$N8N_OWNER_PASSWORD")"
+echo "created n8n owner $N8N_OWNER_EMAIL"

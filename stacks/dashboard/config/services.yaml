@@ -35,6 +35,14 @@
         container: futo-notes
         siteMonitor: http://localhost:10003/health
 
+    - n8n:
+        icon: n8n.svg
+        href: http://{{HOMEPAGE_VAR_HOST}}:10006
+        description: Workflow automation
+        server: podman
+        container: n8n
+        siteMonitor: http://localhost:10006/healthz/readiness
+
     - Portainer:
         icon: portainer.svg
         href: https://{{HOMEPAGE_VAR_HOST}}:10000
@@ -74,3 +82,9 @@
         description: Valkey job queue
         server: podman
         container: immich_redis
+
+    - n8n task runners:
+        icon: mdi-code-braces
+        description: Runs the JavaScript and Python in Code nodes
+        server: podman
+        container: n8n-runners

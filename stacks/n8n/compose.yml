@@ -1,0 +1,56 @@
+# n8n: workflow automation (connect apps, run jobs on a schedule or a webhook).
+# https://docs.n8n.io/hosting/installation/docker/
+# LAN only, like Jellyfin: not published through the Cloudflare tunnel.
+# Images come from GHCR (n8n publishes the same builds there) because Docker
+# Hub's anonymous pull limit is easy to hit.
+name: n8n
+
+services:
+  n8n:
+    container_name: n8n
+    image: ghcr.io/n8n-io/n8n:latest
+    restart: always
+    # The image runs as uid 1000 ("node"). keep-id maps that to your user, so
+    # the files in N8N_DATA are owned by you on the host, not by a sub-UID.
+    userns_mode: keep-id
+    ports:
+      - "10006:5678" # web UI and webhooks
+    environment:
+      TZ: ${TZ:-Etc/UTC}
+      GENERIC_TIMEZONE: ${TZ:-Etc/UTC} # timezone for Schedule triggers
+      # Written by the pre-up hook: http://<LAN address>:10006/. Used for the
+      # webhook and OAuth callback URLs n8n shows in the editor.
+      WEBHOOK_URL: ${N8N_URL:?run ./homelab up n8n (the pre-up hook sets it)}
+      N8N_EDITOR_BASE_URL: ${N8N_URL}
+      # Secure-only cookies would break logging in over plain http on the LAN.
+      N8N_SECURE_COOKIE: "false"
+      # No telemetry, and no "about you" survey after the first login.
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      # Code nodes run in the separate runners container (JavaScript and
+      # Python) instead of inside n8n, which is deprecated.
+      N8N_RUNNERS_MODE: external
+      N8N_RUNNERS_BROKER_LISTEN_ADDRESS: 0.0.0.0
+      N8N_RUNNERS_AUTH_TOKEN: ${N8N_RUNNERS_AUTH_TOKEN:?set N8N_RUNNERS_AUTH_TOKEN in stacks/n8n/.env}
+    healthcheck:
+      # The image has no healthcheck. Slow interval: the dashboard polls
+      # /healthz itself (see the Jellyfin note).
+      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:5678/healthz/readiness || exit 1"]
+      interval: 5m
+      start_period: 1m
+    volumes:
+      # SQLite database, encryption key (config) and binary data
+      - ${N8N_DATA}:/home/node/.n8n
+
+  # Task runners for the Code node. Must be the same version as n8n, so update
+  # both together (./homelab update n8n does).
+  n8n-runners:
+    container_name: n8n-runners
+    image: ghcr.io/n8n-io/runners:latest
+    restart: always
+    environment:
+      GENERIC_TIMEZONE: ${TZ:-Etc/UTC}
+      N8N_RUNNERS_TASK_BROKER_URI: http://n8n:5679
+      N8N_RUNNERS_AUTH_TOKEN: ${N8N_RUNNERS_AUTH_TOKEN}
+    depends_on:
+      - n8n
