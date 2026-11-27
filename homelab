@@ -573,6 +573,7 @@ print_urls() {
   [[ -f $STACKS_DIR/immich/compose.yml ]]    && echo "  Immich     http://$host:10002   (modulab@modulab / modulab)"
   [[ -f $STACKS_DIR/jellyfin/compose.yml ]]  && echo "  Jellyfin   http://$host:10001   (modulab / modulab)"
   [[ -f $STACKS_DIR/futo-notes/compose.yml ]] && echo "  FUTO Notes http://$host:10003   (sync password: ./homelab secret futo-notes)"
+  [[ -f $STACKS_DIR/opencloud/compose.yml ]] && echo "  OpenCloud  https://files.$HOMELAB_DOMAIN  (user: admin, password: ./homelab secret opencloud)"
   [[ -f $STACKS_DIR/n8n/compose.yml ]]       && echo "  n8n        http://$host:10006   (modulab@modulab.lan / Modulab1)"
   echo "  Podman Desktop: Containers tab (rootless Podman engine)"
 }
@@ -582,7 +583,8 @@ cmd_secret() {
   case ${1:-} in
     portainer)  key=PORTAINER_ADMIN_PASSWORD ;;
     futo-notes) key=FUTO_NOTES_PASSWORD ;;
-    *) die "usage: homelab secret portainer|futo-notes" ;;
+    opencloud)  key=OPENCLOUD_ADMIN_PASSWORD ;;
+    *) die "usage: homelab secret portainer|futo-notes|opencloud" ;;
   esac
   grep "^$key=" "$STACKS_DIR/$1/.env" | cut -d= -f2-
 }
@@ -601,7 +603,7 @@ Usage: ./homelab <command> [stack...]
   compose <stack> … run any compose command against a stack
   sync              pull from git and apply changed stacks (what the timer runs)
   autosync on|off   install/remove the systemd sync timer
-  secret <stack>    print a generated password (portainer, futo-notes)
+  secret <stack>    print a generated password (portainer, futo-notes, opencloud)
   printing          set up network printing (sudo) and list the printers
   urls              print service URLs
 

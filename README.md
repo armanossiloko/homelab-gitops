@@ -3,8 +3,8 @@
 # modulab
 
 A GitOps homelab on **rootless Podman**: [Portainer](https://www.portainer.io/),
-[Immich](https://immich.app/), [Jellyfin](https://jellyfin.org/) and
-[n8n](https://n8n.io/), all visible
+[Immich](https://immich.app/), [Jellyfin](https://jellyfin.org/),
+[OpenCloud](https://opencloud.eu/) and [n8n](https://n8n.io/), all visible
 and controllable from **Podman Desktop**, plus a [dashboard](#dashboard) that
 links to every app and shows its health.
 
@@ -57,6 +57,7 @@ mounted at `/mnt/media` and bind-mounted at `/modulab`), not on the OS drive.
 | `/modulab/media/cartoons`       | `/media/cartoons`    | Jellyfin library *Cartoons* |
 | `/modulab/media/wrestling`      | `/media/wrestling`   | Jellyfin library *Wrestling* |
 | `/modulab/media/images`         | `/data`              | Immich (all photos & videos) |
+| `/modulab/media/files`          | `/var/lib/opencloud` | OpenCloud (everyone's files) |
 
 * **Jellyfin:** copy files into the folders and Jellyfin picks them up (or use
   Dashboard → Libraries → Scan). Naming that matches well: `movies/Title (Year)/Title (Year).mkv`
@@ -84,10 +85,12 @@ mounted at `/mnt/media` and bind-mounted at `/modulab`), not on the OS drive.
 | **10004** | Dashboard | http://&lt;host&gt;:10004     | none (LAN only)                                         |
 | 10005     | Power agent | (no page)                | used by the dashboard's Shut down / Restart buttons     |
 | **10006** | n8n       | http://&lt;host&gt;:10006     | `modulab@modulab.lan` / `Modulab1` (see [n8n](#n8n)) |
+| 10007     | OpenCloud | https://files.example.com | `admin` / `./homelab secret opencloud` (random per machine; see [OpenCloud](#opencloud)) |
 | 631       | Printing  | http://&lt;host&gt;:631/printers/ | none; see [Printing](#printing)                  |
 
-**From the internet:** Immich (**https://immich.example.com**) and
-FUTO Notes (**https://futo-notes.example.com**) are also published
+**From the internet:** Immich (**https://immich.example.com**),
+FUTO Notes (**https://futo-notes.example.com**) and OpenCloud
+(**https://files.example.com**, the only way to reach it) are published
 through a Cloudflare Tunnel (see [Cloudflare Tunnel](#cloudflare-tunnel)).
 Jellyfin, n8n, Portainer and the dashboard are LAN-only.
 
@@ -99,7 +102,7 @@ rather than `modulab` because the server is on the internet.
 
 **Port scheme:** every web UI gets the next free port from **10000** upwards,
 mapped onto the app's own internal port (e.g. `10001:8096`). When you add a
-stack, give it the next number (10007, ...), add a row here and a tile to
+stack, give it the next number (10008, ...), add a row here and a tile to
 the [dashboard](#dashboard). Only the
 host side changes, so app docs that mention the internal port still apply
 inside the container. Jellyfin's LAN auto-discovery (7359/udp) is not
@@ -130,7 +133,7 @@ Each tile shows:
   running (and healthy, if the image has a healthcheck), red when stopped or
   unhealthy. Click the dot to see the container's CPU, RAM and network.
 * an **HTTP check** with response time: Jellyfin `/health`, Immich
-  `/api/server/ping`, FUTO Notes `/health`, n8n `/healthz/readiness` and
+  `/api/server/ping`, FUTO Notes `/health`, OpenCloud `/status.php`, n8n `/healthz/readiness` and
   Portainer `/api/system/status`.
   The *Cloudflare Tunnel* tile loads `https://immich.<domain>` from the
   internet side, so it fails if the tunnel or DNS is broken even while the
@@ -187,6 +190,44 @@ see a Docker daemon if one is running, but none of these stacks use it.
 **Portainer:** open the `local` environment. It manages the same Podman engine.
 Portainer lists these stacks as created outside Portainer, which is expected:
 git, not the Portainer editor, is the place to change them.
+
+## OpenCloud
+
+**https://files.example.com** is [OpenCloud](https://docs.opencloud.eu/), a
+self-hosted Google Drive: everyone gets their own account and space, and
+files can be shared with other users or by link. Besides the web UI there
+are desktop sync clients and iOS/Android apps (search for "OpenCloud";
+the server URL is `https://files.example.com`).
+
+* **Log in** as `admin` with the password from `./homelab secret opencloud`.
+  It's random because the server is on the internet. It's applied on the
+  first start only; change it later in the web UI (your avatar, top right).
+* **Family accounts:** *Admin settings → Users → New user* (open Admin
+  settings from the app switcher). There is no self-registration. Give each
+  person their own account
+  rather than sharing `admin`. *Spaces* are shared folders for a group
+  (e.g. a family space); create them under *Spaces*.
+* **Sharing:** right-click a file → *Share* to give another user access, or
+  create a *link* for someone without an account (you can set a password and
+  an expiry date).
+* **Public only:** the port is bound to localhost and there is no LAN
+  address. OpenCloud logs people in with its own OpenID Connect provider,
+  which only works on its https URL. At home that means traffic goes out to
+  Cloudflare and back, so transfers are limited by your internet upload speed
+  (about 2.3 MB/s when tested). The server also has to reach its own public URL to verify logins,
+  so if the tunnel or DNS is down, nobody can log in.
+* **Big files:** the web UI and apps upload in 10 MB chunks (TUS), so files
+  larger than Cloudflare's 100 MB request limit work (tested with 150 MB).
+* **Data:** files are on the media SSD in `/modulab/media/files`. OpenCloud
+  stores them by ID in its own layout, so don't copy files in or out by hand;
+  use the web UI, apps or WebDAV. Its config and generated secrets are in
+  `~/homelab-data/opencloud/config/opencloud.yaml`. Keep it with the data:
+  without it the data can't be used. Files are owned by your user
+  (`userns_mode: keep-id`).
+* **Updates:** the image is pinned to major version 9
+  (`opencloudeu/opencloud:9`, the stable channel). `./homelab update opencloud`
+  pulls new 9.x releases. Read the release notes before moving to a new major
+  version.
 
 ## n8n
 
@@ -354,6 +395,7 @@ stacks/
   jellyfin/             Jellyfin with Intel iGPU passthrough
   futo-notes/           FUTO Notes sync server (encrypted blobs + SQLite)
   n8n/                  n8n workflow automation + its Code-node task runners
+  opencloud/            OpenCloud file storage and sharing (files.<domain>)
   dashboard/            Homepage start page; config/ holds the tiles and widgets,
                         power/ the agent behind the Shut down / Restart buttons
   cloudflared/          Cloudflare Tunnel; config.template.yml maps public hostnames
@@ -375,6 +417,7 @@ HTTPS. The domain is one setting, `HOMELAB_DOMAIN` in `homelab.conf`
 | ---------------------------------- | ------------------------ |
 | `immich.example.com`              | Immich (`localhost:10002`) |
 | `futo-notes.example.com`          | FUTO Notes (`localhost:10003`) |
+| `files.example.com`               | OpenCloud (`localhost:10007`) |
 | `immich.old-domain.example`, `notes.old-domain.example` | previous domain, kept during the move |
 
 * **Routing is in git:** [`stacks/cloudflared/config.template.yml`](stacks/cloudflared/config.template.yml)
@@ -405,14 +448,16 @@ HTTPS. The domain is one setting, `HOMELAB_DOMAIN` in `homelab.conf`
 1. Add the new domain to the same Cloudflare account and wait until it's
    *Active*. A brand-new registration can take a few hours before the TLD
    publishes it and Cloudflare issues its HTTPS certificate.
-2. Create the proxied CNAMEs (`immich`, `futo-notes`, ...) in the new zone
+2. Create the proxied CNAMEs (`immich`, `futo-notes`, `files`, ...) in the new zone
    **before** anything looks the names up. Otherwise resolvers cache "not
    found" for up to 30 minutes.
 3. Set `HOMELAB_DOMAIN` in `homelab.conf` and push. Any change to
    `homelab.conf` makes sync re-apply every stack. To keep the old names
    working during the move, add rules for them to the template.
 4. In Immich, set *Administration → Settings → Server → External Domain*.
-5. Repoint the Immich and FUTO Notes apps on every device.
+5. Repoint the Immich, FUTO Notes and OpenCloud apps on every device.
+   OpenCloud derives its URL from `HOMELAB_DOMAIN` (pre-up hook), but
+   existing shared links keep the old address.
 
 **Uploading through the tunnel:** Cloudflare's free plan rejects uploads over
 **100 MB**, so long phone videos fail over the public URL. In the Immich phone
@@ -462,10 +507,11 @@ Two places hold everything worth keeping:
 
 * **`/modulab/media`** (SSD): your movies, shows, cartoons and wrestling, plus `images/`,
   which holds every Immich photo and video and Immich's nightly database
-  dumps in `images/backups/`.
+  dumps in `images/backups/`, and `files/`, everyone's OpenCloud files.
 * **`~/homelab-data`**: `immich/postgres` (Immich's live database),
-  `jellyfin/config` (users, watch history, metadata) and `n8n` (workflows,
-  credentials and their encryption key).
+  `jellyfin/config` (users, watch history, metadata), `n8n` (workflows,
+  credentials and their encryption key) and `opencloud/config` (OpenCloud's
+  secrets, needed to use `media/files`).
 
 Both drives are in the same machine, so copy both folders to another disk or
 location. Files created by containers that run as a non-root user (for example

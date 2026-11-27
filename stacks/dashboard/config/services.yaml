@@ -35,6 +35,14 @@
         container: futo-notes
         siteMonitor: http://localhost:10003/health
 
+    - OpenCloud:
+        icon: open-cloud.svg
+        href: https://files.{{HOMEPAGE_VAR_DOMAIN}}
+        description: Files and sharing · files.{{HOMEPAGE_VAR_DOMAIN}}
+        server: podman
+        container: opencloud
+        siteMonitor: http://localhost:10007/status.php
+
     - n8n:
         icon: n8n.svg
         href: http://{{HOMEPAGE_VAR_HOST}}:10006

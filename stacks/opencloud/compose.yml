@@ -1,0 +1,56 @@
+# OpenCloud: file storage and sharing with user accounts, like Google Drive
+# (web UI, desktop sync client, iOS/Android apps, share links).
+# https://docs.opencloud.eu/docs/admin/getting-started/container/docker-compose/external-proxy/
+#
+# Published at https://files.<HOMELAB_DOMAIN> through the Cloudflare
+# tunnel, which terminates HTTPS and forwards plain HTTP to port 10007. Logins
+# go through OpenCloud's built-in OpenID Connect provider, which only works on
+# that https URL, so the port is bound to localhost: there is no LAN-only
+# http://<host>:10007 to use (and it couldn't log anyone in).
+name: opencloud
+
+services:
+  opencloud:
+    container_name: opencloud
+    # Stable releases. Major versions can need migration steps, so this is
+    # pinned to one; ./homelab update opencloud pulls new 9.x releases.
+    image: docker.io/opencloudeu/opencloud:9
+    restart: always
+    # The image runs as uid 1000. keep-id maps that to your user, so files in
+    # the data folders are owned by you on the host, not by a sub-UID.
+    userns_mode: keep-id
+    # `init` writes /etc/opencloud/opencloud.yaml (secrets, IDs) on the first
+    # start and fails harmlessly once it exists.
+    entrypoint: ["/bin/sh", "-c", "opencloud init || true; exec opencloud server"]
+    ports:
+      - "127.0.0.1:10007:9200"
+    environment:
+      # https://files.<HOMELAB_DOMAIN>, written by the pre-up hook. The
+      # container must reach this URL itself (OIDC discovery), which it does
+      # out through Cloudflare and back in through the tunnel.
+      OC_URL: ${OC_URL:?run ./homelab up opencloud (the pre-up hook sets it)}
+      PROXY_HTTP_ADDR: 0.0.0.0:9200
+      PROXY_TLS: "false" # Cloudflare does HTTPS; the tunnel talks plain HTTP
+      OC_INSECURE: "false"
+      PROXY_ENABLE_BASIC_AUTH: "false"
+      # Password of the `admin` account, used only on the very first start
+      # (later changes here are ignored; change it in the web UI).
+      IDM_ADMIN_PASSWORD: ${OPENCLOUD_ADMIN_PASSWORD:?set OPENCLOUD_ADMIN_PASSWORD in stacks/opencloud/.env}
+      IDM_CREATE_DEMO_USERS: "false"
+      # Uploads go in 10 MB chunks, well under Cloudflare's 100 MB request limit.
+      FRONTEND_UPLOAD_MAX_CHUNK_SIZE: "10000000"
+      # "Download as zip" of folders, up to 10 GB.
+      FRONTEND_ARCHIVER_MAX_SIZE: "10000000000"
+      OC_LOG_LEVEL: warn
+    healthcheck:
+      # Slow interval: the dashboard polls /status.php itself.
+      test: ["CMD", "opencloud", "proxy", "health"]
+      interval: 5m
+      start_period: 1m
+    volumes:
+      # opencloud.yaml: generated secrets and IDs. Back it up with the data;
+      # without it the data can't be used.
+      - ${OPENCLOUD_CONFIG}:/etc/opencloud
+      # Files (stored by OpenCloud in its own layout, not as plain folders),
+      # user database, search index and thumbnails.
+      - ${OPENCLOUD_DATA}:/var/lib/opencloud

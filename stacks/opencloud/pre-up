@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Writes OC_URL (https://files.<HOMELAB_DOMAIN>) into .env on every run. Its
+# hostname must match the rule in stacks/cloudflared/config.template.yml.
+set -euo pipefail
+
+[[ -n ${HOMELAB_DOMAIN:-} ]] || { echo "HOMELAB_DOMAIN is not set in homelab.conf" >&2; exit 1; }
+url="https://files.$HOMELAB_DOMAIN"
+if grep -q '^OC_URL=' .env 2>/dev/null; then
+  sed -i "s|^OC_URL=.*|OC_URL=$url|" .env
+else
+  printf 'OC_URL=%s\n' "$url" >>.env
+fi

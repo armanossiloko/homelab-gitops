@@ -19,6 +19,11 @@ ingress:
   - hostname: futo-notes.{{DOMAIN}}
     service: http://localhost:10003
 
+  # OpenCloud logs people in with its own OpenID Connect pages, so no
+  # Cloudflare Access in front of it either.
+  - hostname: files.{{DOMAIN}}
+    service: http://localhost:10007
+
   # Previous domain, kept while devices and share links move to the new one.
   # Delete these two rules (and their DNS records) when nothing uses them.
   - hostname: immich.old-domain.example
