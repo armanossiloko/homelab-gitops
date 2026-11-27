@@ -2,9 +2,11 @@
 # 1. Creates the Immich admin account on a fresh install, and turns on
 #    hardware transcoding (Intel Quick Sync) there if the iGPU is present.
 #    Later changes made in the UI are left alone.
-# 2. Sets Immich's external domain (used in share links) to IMMICH_PUBLIC_URL
-#    from homelab.conf, if set.
+# 2. Sets Immich's external domain (used in share links) to IMMICH_PUBLIC_URL,
+#    by default https://immich.<HOMELAB_DOMAIN> (both from .homelab.env).
 set -euo pipefail
+
+[[ -z ${IMMICH_PUBLIC_URL:-} && -n ${HOMELAB_DOMAIN:-} ]] && IMMICH_PUBLIC_URL=https://immich.$HOMELAB_DOMAIN
 
 API=http://localhost:10002/api
 for _ in $(seq 90); do

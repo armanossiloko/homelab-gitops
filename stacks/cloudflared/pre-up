@@ -1,12 +1,31 @@
 #!/usr/bin/env bash
-# Renders config.yml from config.template.yml ({{DOMAIN}} → HOMELAB_DOMAIN) and
-# records its hash in .env as CONFIG_HASH. compose.yml puts the hash in a
-# label, so a changed config makes compose recreate the tunnel container.
+# Renders config.yml from config.template.yml and records its hash in .env as
+# CONFIG_HASH. compose.yml puts the hash in a label, so a changed config makes
+# compose recreate the tunnel container. Placeholders:
+#   {{DOMAIN}}       HOMELAB_DOMAIN (.homelab.env)
+#   {{TUNNEL_ID}}    the tunnel ID inside TUNNEL_TOKEN (.env)
+#   {{LOCAL_RULES}}  the line is replaced by ingress.local.yml, if it exists
+# The domain and tunnel ID stay out of git (the repo is public).
 set -euo pipefail
 
-[[ -n ${HOMELAB_DOMAIN:-} ]] || { echo "HOMELAB_DOMAIN is not set in homelab.conf" >&2; exit 1; }
+[[ -n ${HOMELAB_DOMAIN:-} ]] || { echo "HOMELAB_DOMAIN is not set; add it to .homelab.env" >&2; exit 1; }
+[[ -n ${TUNNEL_TOKEN:-} ]] || { echo "TUNNEL_TOKEN is missing; see \"Cloudflare Tunnel\" in README.md" >&2; exit 1; }
+# The token is base64 JSON: {"a": account tag, "t": tunnel ID, "s": secret}.
+tunnel_id=$(printf '%s' "$TUNNEL_TOKEN" | base64 -d 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin)["t"])') \
+  || { echo "could not read the tunnel ID from TUNNEL_TOKEN" >&2; exit 1; }
 
-rendered=$(sed "s/{{DOMAIN}}/$HOMELAB_DOMAIN/g" config.template.yml)
+local_rules=
+[[ -f ingress.local.yml ]] && local_rules=$(cat ingress.local.yml)
+rendered=$(LOCAL_RULES=$local_rules DOMAIN=$HOMELAB_DOMAIN TUNNEL_ID=$tunnel_id python3 -c '
+import os, sys
+out = []
+for line in open("config.template.yml"):
+    if line.strip() == "# {{LOCAL_RULES}}":
+        if os.environ["LOCAL_RULES"]:
+            out.append(os.environ["LOCAL_RULES"].rstrip("\n") + "\n")
+        continue
+    out.append(line.replace("{{DOMAIN}}", os.environ["DOMAIN"]).replace("{{TUNNEL_ID}}", os.environ["TUNNEL_ID"]))
+sys.stdout.write("".join(out))')
 if grep -q '{{' <<<"$rendered"; then
   echo "config.template.yml has unknown placeholders" >&2
   exit 1
@@ -20,4 +39,4 @@ if grep -q '^CONFIG_HASH=' .env 2>/dev/null; then
 else
   printf 'CONFIG_HASH=%s\n' "$hash" >>.env
 fi
-echo "rendered config.yml for $HOMELAB_DOMAIN ($hash)"
+echo "rendered config.yml for $HOMELAB_DOMAIN, tunnel $tunnel_id ($hash)"

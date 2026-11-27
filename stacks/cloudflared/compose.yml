@@ -1,7 +1,7 @@
 # Cloudflare Tunnel: publishes selected services to the internet without
 # opening any router ports. Which hostname goes to which service is defined in
 # config.template.yml (tracked in git); only the tunnel token is secret (.env).
-# Tunnel: <tunnel-name> (locally managed, config_src=local)
+# The tunnel is locally managed (config_src=local); its ID comes from the token.
 name: cloudflared
 
 services:

@@ -44,6 +44,10 @@ one machine, pass them to bootstrap. They are saved to the gitignored
 HOMELAB_MEDIA=/srv/media HOMELAB_SYNC_INTERVAL=10min ./bootstrap.sh
 ```
 
+The public domain is never in git, because this repo is public. Set it once
+per machine: `HOMELAB_DOMAIN=example.com ./bootstrap.sh`, or add
+`HOMELAB_DOMAIN=...` to `.homelab.env`. Below, `<domain>` stands for it.
+
 ## Media storage
 
 Media lives on the dedicated 512 GB SSD (`/dev/nvme1n1p1`, label `media`,
@@ -85,19 +89,19 @@ mounted at `/mnt/media` and bind-mounted at `/modulab`), not on the OS drive.
 | **10004** | Dashboard | http://&lt;host&gt;:10004     | none (LAN only)                                         |
 | 10005     | Power agent | (no page)                | used by the dashboard's Shut down / Restart buttons     |
 | **10006** | n8n       | http://&lt;host&gt;:10006     | `modulab@modulab.lan` / `Modulab1` (see [n8n](#n8n)) |
-| 10007     | OpenCloud | https://files.example.com | `admin` / `./homelab secret opencloud` (random per machine; see [OpenCloud](#opencloud)) |
+| 10007     | OpenCloud | https://files.&lt;domain&gt; | `admin` / `./homelab secret opencloud` (random per machine; see [OpenCloud](#opencloud)) |
 | 631       | Printing  | http://&lt;host&gt;:631/printers/ | none; see [Printing](#printing)                  |
 
-**From the internet:** Immich (**https://immich.example.com**),
-FUTO Notes (**https://futo-notes.example.com**) and OpenCloud
-(**https://files.example.com**, the only way to reach it) are published
+**From the internet:** Immich (**https://immich.&lt;domain&gt;**),
+FUTO Notes (**https://futo-notes.&lt;domain&gt;**) and OpenCloud
+(**https://files.&lt;domain&gt;**, the only way to reach it) are published
 through a Cloudflare Tunnel (see [Cloudflare Tunnel](#cloudflare-tunnel)).
 Jellyfin, n8n, Portainer and the dashboard are LAN-only.
 
 **FUTO Notes** is a sync server for the end-to-end encrypted
 [FUTO Notes](https://notes.futo.org) apps; the server only stores encrypted
 data. In the app, open *Settings → Self-hosted sync*, then enter
-`https://futo-notes.example.com` and the sync password. It's random
+`https://futo-notes.<domain>` and the sync password. It's random
 rather than `modulab` because the server is on the internet.
 
 **Port scheme:** every web UI gets the next free port from **10000** upwards,
@@ -193,11 +197,11 @@ git, not the Portainer editor, is the place to change them.
 
 ## OpenCloud
 
-**https://files.example.com** is [OpenCloud](https://docs.opencloud.eu/), a
+**https://files.&lt;domain&gt;** is [OpenCloud](https://docs.opencloud.eu/), a
 self-hosted Google Drive: everyone gets their own account and space, and
 files can be shared with other users or by link. Besides the web UI there
 are desktop sync clients and iOS/Android apps (search for "OpenCloud";
-the server URL is `https://files.example.com`).
+the server URL is `https://files.<domain>`).
 
 * **Log in** as `admin` with the password from `./homelab secret opencloud`.
   It's random because the server is on the internet. It's applied on the
@@ -388,7 +392,7 @@ daemon is around.
 ```
 bootstrap.sh            one-shot setup + deploy (calls ./homelab bootstrap)
 homelab                 CLI: up/down/update/sync/status/...
-homelab.conf            shared settings: data dir, media root, ports, public URLs
+homelab.conf            shared settings: data dir, media root, ports (no domain: that is in .homelab.env)
 stacks/
   portainer/            Portainer CE (admin password from .env secret)
   immich/               Immich server, ML, Valkey, Postgres (+ upstream hwaccel files)
@@ -407,26 +411,29 @@ stacks/*/.env           machine-local values and secrets (gitignored)
 
 ## Cloudflare Tunnel
 
-`stacks/cloudflared` runs a [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
-named `<tunnel-name>` (account *<account>*). The tunnel connects
-out to Cloudflare, so no router ports are opened, and Cloudflare provides
-HTTPS. The domain is one setting, `HOMELAB_DOMAIN` in `homelab.conf`
-(currently `example.com`).
+`stacks/cloudflared` runs a [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/).
+The tunnel connects out to Cloudflare, so no router ports are opened, and
+Cloudflare provides HTTPS. The domain is one setting, `HOMELAB_DOMAIN` in
+`.homelab.env` (gitignored, see [Quick start](#quick-start)).
 
-| Public hostname                    | Goes to                  |
-| ---------------------------------- | ------------------------ |
-| `immich.example.com`              | Immich (`localhost:10002`) |
-| `futo-notes.example.com`          | FUTO Notes (`localhost:10003`) |
-| `files.example.com`               | OpenCloud (`localhost:10007`) |
-| `immich.old-domain.example`, `notes.old-domain.example` | previous domain, kept during the move |
+| Public hostname          | Goes to                        |
+| ------------------------ | ------------------------------ |
+| `immich.<domain>`        | Immich (`localhost:10002`)     |
+| `futo-notes.<domain>`    | FUTO Notes (`localhost:10003`) |
+| `files.<domain>`         | OpenCloud (`localhost:10007`)  |
 
 * **Routing is in git:** [`stacks/cloudflared/config.template.yml`](stacks/cloudflared/config.template.yml)
   (a locally managed tunnel). Before each deploy, the `pre-up` hook renders it
-  to `config.yml` (gitignored) with `{{DOMAIN}}` replaced, and the tunnel is
-  recreated whenever the result changes.
+  to `config.yml` (gitignored) with `{{DOMAIN}}` and `{{TUNNEL_ID}}` filled
+  in (the ID is read from the token), and the tunnel is recreated whenever
+  the result changes. Neither value is in git.
+* **Machine-local rules:** hostnames that shouldn't be in git, such as an
+  old domain kept during a move, go in `stacks/cloudflared/ingress.local.yml`
+  (gitignored, same format as the template's rules). They're inserted before
+  the catch-all.
 * **Publishing another service:** add an ingress rule to the template, add a
-  proxied DNS `CNAME <name> → <tunnel-id>.cfargotunnel.com`
-  in Cloudflare, then push. Think twice before publishing admin tools like
+  proxied DNS `CNAME <name> → <tunnel-id>.cfargotunnel.com` in Cloudflare (the
+  `pre-up` hook prints the ID: `./homelab up cloudflared`), then push. Think twice before publishing admin tools like
   Portainer.
 * **Only secret:** `TUNNEL_TOKEN` in `stacks/cloudflared/.env` (gitignored). On a
   new machine the stack refuses to start until it is set. Fetch the token with
@@ -441,8 +448,9 @@ HTTPS. The domain is one setting, `HOMELAB_DOMAIN` in `homelab.conf`
 
   Only run one machine with the same token at a time, unless you deliberately
   want Cloudflare to load-balance between them.
-* **Immich's external domain** (used in share links) is set from
-  `IMMICH_PUBLIC_URL` in `homelab.conf`.
+* **Immich's external domain** (used in share links) is set to
+  `https://immich.<domain>`, or to `IMMICH_PUBLIC_URL` if that's set in
+  `.homelab.env`.
 
 **Changing the domain:**
 1. Add the new domain to the same Cloudflare account and wait until it's
@@ -451,9 +459,9 @@ HTTPS. The domain is one setting, `HOMELAB_DOMAIN` in `homelab.conf`
 2. Create the proxied CNAMEs (`immich`, `futo-notes`, `files`, ...) in the new zone
    **before** anything looks the names up. Otherwise resolvers cache "not
    found" for up to 30 minutes.
-3. Set `HOMELAB_DOMAIN` in `homelab.conf` and push. Any change to
-   `homelab.conf` makes sync re-apply every stack. To keep the old names
-   working during the move, add rules for them to the template.
+3. Set `HOMELAB_DOMAIN` in `.homelab.env` and run `./homelab up` (sync
+   doesn't watch that file). To keep the old names working during the move,
+   add rules for them to `stacks/cloudflared/ingress.local.yml`.
 4. In Immich, set *Administration → Settings → Server → External Domain*.
 5. Repoint the Immich, FUTO Notes and OpenCloud apps on every device.
    OpenCloud derives its URL from `HOMELAB_DOMAIN` (pre-up hook), but
@@ -463,7 +471,7 @@ HTTPS. The domain is one setting, `HOMELAB_DOMAIN` in `homelab.conf`
 **100 MB**, so long phone videos fail over the public URL. In the Immich phone
 app, open *Settings → Networking → Automatic URL switching*, add your home
 Wi-Fi with the local URL `http://<host>:10002`, and keep
-`https://immich.example.com` as the external URL. Phones then back
+`https://immich.<domain>` as the external URL. Phones then back
 up over the LAN at home and use the tunnel only when away.
 
 **Security:** Immich's login page is now reachable by anyone. Give every

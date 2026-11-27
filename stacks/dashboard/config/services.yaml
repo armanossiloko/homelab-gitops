@@ -6,7 +6,7 @@
 # host networking, so localhost:<port> is the app's published port.
 #
 # {{HOMEPAGE_VAR_HOST}} and {{HOMEPAGE_VAR_DOMAIN}} are filled in from .env,
-# which the pre-up hook writes (LAN address and HOMELAB_DOMAIN).
+# which the pre-up hook writes (LAN address and HOMELAB_DOMAIN from .homelab.env).
 #
 # When you add a stack, add its tile here too.
 

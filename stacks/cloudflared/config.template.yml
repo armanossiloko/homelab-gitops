@@ -1,14 +1,17 @@
 # Template for config.yml, which ./homelab renders before every deploy
-# (pre-up hook): {{DOMAIN}} becomes HOMELAB_DOMAIN from homelab.conf.
+# (pre-up hook): {{DOMAIN}} becomes HOMELAB_DOMAIN (.homelab.env) and
+# {{TUNNEL_ID}} the tunnel ID read from TUNNEL_TOKEN (.env). Neither is in git.
 # Edit this file, not config.yml (generated, gitignored).
 #
 # To publish another service:
 #   1. add a rule below (above the final catch-all),
-#   2. add a proxied CNAME <name> → <tunnel-id>.cfargotunnel.com
-#      in Cloudflare DNS for the domain,
+#   2. add a proxied CNAME <name> → <tunnel-id>.cfargotunnel.com in Cloudflare
+#      DNS for the domain (the pre-up hook prints the tunnel ID),
 #   3. commit and push; sync re-renders and restarts the tunnel.
+# Rules that shouldn't be in git (e.g. other domains) go in ingress.local.yml
+# next to this file (gitignored); they're inserted before the catch-all.
 # https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/configure-tunnels/local-management/configuration-file/
-tunnel: <tunnel-id>
+tunnel: {{TUNNEL_ID}}
 
 ingress:
   - hostname: immich.{{DOMAIN}}
@@ -24,12 +27,7 @@ ingress:
   - hostname: files.{{DOMAIN}}
     service: http://localhost:10007
 
-  # Previous domain, kept while devices and share links move to the new one.
-  # Delete these two rules (and their DNS records) when nothing uses them.
-  - hostname: immich.old-domain.example
-    service: http://localhost:10002
-  - hostname: notes.old-domain.example
-    service: http://localhost:10003
+  # {{LOCAL_RULES}}
 
   # Anything else that reaches the tunnel gets a 404.
   - service: http_status:404

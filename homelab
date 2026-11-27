@@ -28,7 +28,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # Settings: homelab.conf (tracked, shared defaults) is overridden by .homelab.env
 # (gitignored, this machine only). `bootstrap` saves any HOMELAB_* variable you
 # pass on its command line into .homelab.env, e.g. HOMELAB_MEDIA=/srv/media ./bootstrap.sh
-CONF_VARS=(HOMELAB_DATA HOMELAB_MEDIA HOMELAB_SYNC_INTERVAL HOMELAB_PORTS HOMELAB_HOST)
+CONF_VARS=(HOMELAB_DATA HOMELAB_MEDIA HOMELAB_SYNC_INTERVAL HOMELAB_PORTS HOMELAB_HOST HOMELAB_DOMAIN)
 SHARED_CONF="$ROOT/homelab.conf"
 
 save_conf_overrides() {
@@ -573,7 +573,7 @@ print_urls() {
   [[ -f $STACKS_DIR/immich/compose.yml ]]    && echo "  Immich     http://$host:10002   (modulab@modulab / modulab)"
   [[ -f $STACKS_DIR/jellyfin/compose.yml ]]  && echo "  Jellyfin   http://$host:10001   (modulab / modulab)"
   [[ -f $STACKS_DIR/futo-notes/compose.yml ]] && echo "  FUTO Notes http://$host:10003   (sync password: ./homelab secret futo-notes)"
-  [[ -f $STACKS_DIR/opencloud/compose.yml ]] && echo "  OpenCloud  https://files.$HOMELAB_DOMAIN  (user: admin, password: ./homelab secret opencloud)"
+  [[ -f $STACKS_DIR/opencloud/compose.yml ]] && echo "  OpenCloud  https://files.${HOMELAB_DOMAIN:-<HOMELAB_DOMAIN unset>}  (user: admin, password: ./homelab secret opencloud)"
   [[ -f $STACKS_DIR/n8n/compose.yml ]]       && echo "  n8n        http://$host:10006   (modulab@modulab.lan / Modulab1)"
   echo "  Podman Desktop: Containers tab (rootless Podman engine)"
 }
