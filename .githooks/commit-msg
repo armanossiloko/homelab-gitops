@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Refuses a commit message that contains one of this machine's private values
+# (see private-values).
+set -euo pipefail
+dir=$(dirname "$0")
+mapfile -t values < <("$dir/private-values" | grep -v '^$' | sort -u)
+for v in "${values[@]}"; do
+  if grep -v '^#' "$1" | grep -q -i -F -- "$v"; then
+    echo "commit-msg: the message contains a private value (domain, tunnel ID or LAN address)." >&2
+    echo "The repo is public; write <domain>, <host> or <tunnel-id> instead." >&2
+    exit 1
+  fi
+done

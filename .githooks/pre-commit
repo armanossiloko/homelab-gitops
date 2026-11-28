@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Refuses a commit whose added lines contain one of this machine's private
+# values (see private-values). Installed by ./homelab bootstrap
+# (git config core.hooksPath .githooks).
+set -euo pipefail
+dir=$(dirname "$0")
+mapfile -t values < <("$dir/private-values" | grep -v '^$' | sort -u)
+((${#values[@]})) || exit 0
+
+added=$(git diff --cached --no-color -U0 --diff-filter=ACMR | grep '^+' | grep -v '^+++ ' || true)
+found=0
+for v in "${values[@]}"; do
+  if grep -q -i -F -- "$v" <<<"$added"; then
+    files=$(git diff --cached --name-only -G"$(sed 's/[][\.*^$]/\\&/g' <<<"$v")" -i | tr '\n' ' ')
+    echo "pre-commit: refusing to commit a private value (domain, tunnel ID or LAN address) in: $files" >&2
+    found=1
+  fi
+done
+if ((found)); then
+  echo "The repo is public. Use <domain>, <host> or <tunnel-id> instead; real values belong in" >&2
+  echo ".homelab.env, stacks/*/.env or stacks/cloudflared/ingress.local.yml (all gitignored)." >&2
+  exit 1
+fi

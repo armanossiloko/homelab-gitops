@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Prints this machine's private values, one per line: the public domain
+# (HOMELAB_DOMAIN in .homelab.env), other domains in the machine-local tunnel
+# rules, the tunnel ID (inside TUNNEL_TOKEN) and the LAN address. The repo is
+# public, so the pre-commit and commit-msg hooks refuse commits that contain
+# any of them. Nothing private is stored here: it's all read at commit time
+# from gitignored files.
+set -uo pipefail
+root=$(git rev-parse --show-toplevel)
+
+(
+  set +u
+  # shellcheck disable=SC1091
+  [[ -f $root/homelab.conf ]] && source "$root/homelab.conf"
+  # shellcheck disable=SC1091
+  [[ -f $root/.homelab.env ]] && source "$root/.homelab.env"
+  printf '%s\n' "${HOMELAB_DOMAIN:-}" "${HOMELAB_HOST:-}"
+) 2>/dev/null
+
+# Registrable domains (last two labels) of the machine-local tunnel rules.
+f=$root/stacks/cloudflared/ingress.local.yml
+[[ -f $f ]] && sed -n 's/^[[:space:]]*-*[[:space:]]*hostname:[[:space:]]*\([^[:space:]#]*\).*/\1/p' "$f" | awk -F. 'NF>=2{print $(NF-1)"."$NF}'
+
+# Tunnel ID: TUNNEL_TOKEN is base64 JSON with the ID in "t".
+token=$(sed -n 's/^TUNNEL_TOKEN=//p' "$root/stacks/cloudflared/.env" 2>/dev/null)
+[[ -n $token ]] && printf '%s' "$token" | base64 -d 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin)["t"])' 2>/dev/null
+
+# LAN address (source address of the default route), as ./homelab detects it.
+ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p'
+exit 0

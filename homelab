@@ -341,6 +341,10 @@ cmd_bootstrap() {
       || warn "could not enable linger; containers will start at login instead of at boot"
   fi
 
+  # Hooks that refuse commits containing this machine's domain, tunnel ID or
+  # LAN address (the repo is public). See .githooks/.
+  git -C "$ROOT" config core.hooksPath .githooks
+
   save_conf_overrides
   load_local_conf
   mkdir -p "$HOMELAB_DATA" || die "cannot create $HOMELAB_DATA"

@@ -47,6 +47,9 @@ HOMELAB_MEDIA=/srv/media HOMELAB_SYNC_INTERVAL=10min ./bootstrap.sh
 The public domain is never in git, because this repo is public. Set it once
 per machine: `HOMELAB_DOMAIN=example.com ./bootstrap.sh`, or add
 `HOMELAB_DOMAIN=...` to `.homelab.env`. Below, `<domain>` stands for it.
+Bootstrap also turns on the git hooks in [`.githooks/`](.githooks/), which
+refuse commits that contain this machine's domain, tunnel ID or LAN address,
+read at commit time from the gitignored files that hold them.
 
 ## Media storage
 
@@ -403,6 +406,7 @@ stacks/
   dashboard/            Homepage start page; config/ holds the tiles and widgets,
                         power/ the agent behind the Shut down / Restart buttons
   cloudflared/          Cloudflare Tunnel; config.template.yml maps public hostnames
+.githooks/              refuse commits containing private values (domain, tunnel ID, LAN IP)
 printing/
   homelab-printers      sets up and shares USB printers (installed to /usr/local/sbin)
 .homelab.env            machine-local settings (gitignored)
